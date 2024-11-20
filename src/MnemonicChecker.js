@@ -14,6 +14,14 @@ const MnemonicChecker = () => {
   const [walletData, setWalletData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
+  const [toastMessage, setToastMessage] = useState(''); // For showing the Toast
+
+  const showToast = (message) => {
+    setToastMessage(message);
+    setTimeout(() => {
+      setToastMessage(''); // Hide the toast after 2 seconds
+    }, 2000);
+  };
 
   const deriveKeypair = (mnemonic) => {
     try {
@@ -85,12 +93,11 @@ const MnemonicChecker = () => {
 
   const copyToClipboard = (text) => {
     navigator.clipboard.writeText(text);
-    // You can use a non-intrusive way to show copy feedback, e.g., a toast or inline message
-    console.log('Copied to clipboard!');
+    showToast('Copied to clipboard!');
   };
 
   return (
-    <div className="max-w-4xl mx-auto p-6 bg-gray-100 rounded-lg shadow-md mt-6">
+    <div className="max-w-4xl mx-auto p-6 bg-gray-100 rounded-lg shadow-md mt-6 relative">
       <h1 className="text-2xl font-bold mb-4 text-gray-800">Solana Wallet Checker</h1>
       <textarea
         className="w-full p-3 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-400 mb-4"
@@ -106,6 +113,12 @@ const MnemonicChecker = () => {
       >
         {loading ? loadingMessage || 'Checking...' : 'Check Balances'}
       </button>
+
+      {toastMessage && (
+        <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-green-500 text-white px-4 py-2 rounded shadow-lg">
+          {toastMessage}
+        </div>
+      )}
 
       {walletData.length > 0 && (
         <table className="w-full mt-6 bg-white rounded-lg shadow-md overflow-hidden">

@@ -20,5 +20,10 @@ module.exports = function override(config) {
     }),
   ]);
 
+  // Disable webpack optimization to avoid terser-webpack-plugin issues
+  if (process.env.NODE_ENV === 'production') {
+    config.optimization.minimizer = [];
+  }
+
   return config;
 };

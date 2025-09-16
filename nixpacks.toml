@@ -1,8 +1,11 @@
 [phases.setup]
-cmds = ["npm install --legacy-peer-deps --force"]
+cmds = [
+  "npm install --legacy-peer-deps --force",
+  "npm install ajv@8.12.0 ajv-keywords@5.1.0 ajv-formats@2.1.1 --force"
+]
 
 [phases.build]
-cmds = ["GENERATE_SOURCEMAP=false npm run build"]
+cmds = ["CI=false GENERATE_SOURCEMAP=false npm run build"]
 
 [phases.start]
 cmd = "node server.js"

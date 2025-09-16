@@ -43,7 +43,10 @@ const MnemonicChecker = () => {
       .map(m => m.trim().toLowerCase()) // Convert to lowercase
       .filter(m => m);
 
-    const connection = new Connection("https://white-wispy-bush.solana-mainnet.quiknode.pro/b461f84b8a907c8e803d526a4d5aca75439ff3bd", "confirmed");
+    const connection = new Connection(
+      process.env.REACT_APP_SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com",
+      "confirmed"
+    );
 
     let data = [];
 

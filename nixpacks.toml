@@ -1,8 +1,8 @@
 [phases.setup]
-cmds = ["npm install --legacy-peer-deps"]
+cmds = ["npm install --legacy-peer-deps --force"]
 
 [phases.build]
-cmds = ["npm run build"]
+cmds = ["GENERATE_SOURCEMAP=false npm run build"]
 
 [phases.start]
-cmd = "npx serve -s build -l 3000"
+cmd = "node server.js"

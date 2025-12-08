@@ -12,7 +12,7 @@ if (!window.Buffer) {
 }
 
 const DEBANK_TIMEOUT = 850; // DeBank Rate Limit Interval
-const DEBANK_API_KEY = "058e80866a8d74cb04db12cc6a35f778cee54431";
+const DEBANK_API_KEY = process.env.REACT_APP_DEBANK_ACCESS_KEY;
 
 const MnemonicChecker = () => {
   const [mnemonics, setMnemonics] = useState('');
@@ -68,6 +68,10 @@ const MnemonicChecker = () => {
   };
 
   const fetchDebankBalance = async (address) => {
+    if (!DEBANK_API_KEY) {
+      console.error("Missing REACT_APP_DEBANK_ACCESS_KEY. DeBank request aborted.");
+      return 0;
+    }
     try {
       const response = await fetch(`https://pro-openapi.debank.com/v1/user/total_balance?id=${address}`, {
         method: 'GET',

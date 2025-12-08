@@ -245,21 +245,29 @@ const MnemonicChecker = () => {
 
             if (balance > 0 || (pathIndex > 0 && prevBalance > 0) || (pathIndex >= 2 && prevPrevBalance > 0) || pathIndex === 0) {
               const nextPath = pathIndex + 1;
-              queueRef.current.push({ mnemonicId, mnemonic, pathIndex: nextPath });
+              // User Request: Finish current mnemonic paths before moving to next mnemonic.
+              // Use unshift() to add to FRONT of queue (LIFO/DFS), prioritizing this mnemonic's next path.
+              queueRef.current.unshift({ mnemonicId, mnemonic, pathIndex: nextPath });
             }
           }
         } catch (error) {
           console.warn(`EVM Task failed, retrying: ${pathIndex}`, error);
-          // Retry: Push back to start or end? End seems safer for rate limit.
-          queueRef.current.push(task);
+          queueRef.current.push(task); // Retry at end
         } finally {
           processingRef.current = false;
         }
       }
-    }, DEBANK_TIMEOUT);
 
+      // Global Completion Check (EVM side)
+      if (queueRef.current.length === 0 && !processingRef.current &&
+        solanaQueueRef.current.length === 0 && !solanaProcessingRef.current &&
+        isScanning) { // only if currently scanning
+        setIsScanning(false);
+      }
+
+    }, DEBANK_TIMEOUT);
     return () => clearInterval(intervalRef.current);
-  }, []);
+  }, [isScanning]);
 
   // Solana Queue Processing Loop
   React.useEffect(() => {
@@ -302,14 +310,16 @@ const MnemonicChecker = () => {
         }
       }
 
-      // Check if finished (Solana queue empty and not processing)
-      if (solanaQueueRef.current.length === 0 && !solanaProcessingRef.current && progress.total > 0 && progress.current === progress.total) {
+      // Global Completion Check (Solana side)
+      if (queueRef.current.length === 0 && !processingRef.current &&
+        solanaQueueRef.current.length === 0 && !solanaProcessingRef.current &&
+        isScanning) {
         setIsScanning(false);
       }
 
     }, SOLANA_TIMEOUT);
     return () => clearInterval(solanaIntervalRef.current);
-  }, [progress.total, progress.current]);
+  }, [progress.total, progress.current, isScanning]);
 
   const handleCheckBalances = async () => {
     setWalletData([]); // Clear previous data
@@ -378,9 +388,23 @@ const MnemonicChecker = () => {
     showToast('Copied to clipboard!');
   };
 
+  // Calculate Total Net Worth
+  const totalNetWorth = walletData.reduce((acc, curr) => acc + curr.netWorth, 0);
+
+  // Update Page Title with Total Net Worth
+  React.useEffect(() => {
+    document.title = `Total: $${totalNetWorth.toFixed(2)} - Wallet Checker`;
+  }, [totalNetWorth]);
+
   return (
     <div className="max-w-7xl mx-auto p-6 bg-gray-100 rounded-lg shadow-md mt-6 relative">
-      <h1 className="text-2xl font-bold mb-4 text-gray-800">Wallet Net Worth Checker (SOL & EVM)</h1>
+      <div className="flex justify-between items-center mb-4">
+        <h1 className="text-2xl font-bold text-gray-800">Wallet Net Worth Checker (SOL & EVM)</h1>
+        <div className="bg-green-100 px-4 py-2 rounded-lg shadow border border-green-300">
+          <span className="text-gray-600 font-semibold mr-2">Total Net Worth:</span>
+          <span className="text-2xl font-bold text-green-700 font-mono">${totalNetWorth.toFixed(2)}</span>
+        </div>
+      </div>
       <textarea
         className="w-full p-3 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-400 mb-4"
         rows="5"

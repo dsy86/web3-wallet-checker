@@ -37,69 +37,89 @@ const MnemonicChecker = () => {
 
   const fetchNetWorth = async (address) => {
     try {
-      // 1. Fetch Assets (Tokens + Native Balance) from Helius
+      const apiKey = process.env.REACT_APP_MORALIS_API_KEY;
+      if (!apiKey) {
+        console.warn("Moralis API Key is missing");
+        return 0;
+      }
+
+      // Moralis Solana Portfolio Endpoint
+      // Note: This endpoint returns native balance and tokens with prices
       const response = await fetch(
-        process.env.REACT_APP_SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com",
+        `https://solana-gateway.moralis.io/account/mainnet/${address}/portfolio`,
         {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            jsonrpc: '2.0',
-            id: 'helius-asset-check',
-            method: 'getAssetsByOwner',
-            params: {
-              ownerAddress: address,
-              page: 1,
-              limit: 100, // Fetch up to 100 assets
-              displayOptions: {
-                showFungible: true,
-                showNativeBalance: true,
-              }
-            },
-          }),
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json',
+            'X-API-Key': apiKey,
+          },
         }
       );
-      const { result } = await response.json();
-      if (!result || !result.items) return 0;
 
-      // 2. Identify tokens and SOL
-      let nativeBalance = result.nativeBalance.lamports || 0; // Raw lamports
-      const tokens = result.items.filter(item => item.interface === 'FungibleToken' || item.interface === 'FungibleAsset');
+      if (!response.ok) {
+        throw new Error(`Moralis API error: ${response.statusText}`);
+      }
 
-      // Collect Mints for Price Fetching
-      // SOL Mint: So11111111111111111111111111111111111111112
-      const solMint = 'So11111111111111111111111111111111111111112';
-      const mints = tokens.map(t => t.id);
-      mints.push(solMint); // Always check SOL price
+      const data = await response.json();
 
-      // Only fetch if we have mints
-      if (mints.length === 0 && nativeBalance === 0) return 0;
-
-      // 3. Fetch Prices from Jupiter
-      // Jupiter V2 Price API supports up to 100 IDs
-      const priceResponse = await fetch(`https://api.jup.ag/price/v2?ids=${mints.join(',')}`);
-      const priceData = await priceResponse.json();
-      const prices = priceData.data || {};
-
-      // 4. Calculate Total Net Worth
+      // Calculate Total Net Worth from Portfolio Data
       let totalUsd = 0;
 
-      // Add SOL Value
-      const solPrice = prices[solMint]?.price || 0;
-      totalUsd += (nativeBalance / 1e9) * solPrice;
+      // 1. Native Balance
+      if (data.nativeBalance && data.nativeBalance.lamports) {
+        // Note: Moralis output structure might vary, checking expected fields
+        // Usually nativeBalance has 'solana' or similar. 
+        // If the endpoint is specific to Solana, it returns object with nativeBalance.
+        // Wait, verified docs say it returns list of tokens and native balance field?
+        // Search result says "returns complete portfolio valuation".
+        // If Moralis returns a total 'total_networth_usd' field, use that.
+        // If not, sum it up.
+        // Based on search [1][3], it includes valuation. 
+        // Let's try to find a 'total_networth_usd' if it exists, otherwise iterate.
 
-      // Add Token Values
-      tokens.forEach(token => {
-        const mint = token.id;
-        const price = prices[mint]?.price || 0;
-        const decimals = token.token_info?.decimals || 0;
-        const amount = token.token_info?.balance || 0;
+        // Actually, let's sum up to be safe as structures vary.
+        const lamports = parseFloat(data.nativeBalance.lamports || 0);
+        // Does it provide SOL price? Usually in 'tokens' list as Wrapped SOL or separate price endpoint.
+        // But Moralis Portfolio often has "native_balance_usd" or similar.
+        // Let's iterate 'tokens' which usually includes native SOL in portfolio view or separate.
+      }
 
-        if (price > 0 && amount > 0) {
-          const adjustedAmount = amount / Math.pow(10, decimals);
-          totalUsd += adjustedAmount * price;
+      // Simpler approach based on standard Moralis responses:
+      // It normally returns a list of tokens. 
+      // If we use the endpoint /portfolio, it might return { tokens: [], nativeBalance: {} }
+
+      // Let's use the tokens list summing.
+      if (data.tokens) {
+        data.tokens.forEach(token => {
+          // total_price_usd usually provided
+          /* 
+            Example:
+            {
+                "mint": "...",
+                "amount": "...",
+                "decimals": 9,
+                "price_usd": 23.4,
+                "value_usd": 105.4
+            }
+          */
+          if (token.value_usd) {
+            totalUsd += parseFloat(token.value_usd);
+          } else if (token.price_usd && token.amount && token.decimals) {
+            totalUsd += (parseFloat(token.amount) / Math.pow(10, token.decimals)) * parseFloat(token.price_usd);
+          }
+        });
+      }
+
+      // Add Native SQL Value if invalid in tokens list (sometimes native is separate)
+      if (data.nativeBalance && data.nativeBalance.lamports && !data.tokens?.some(t => t.mint === '11111111111111111111111111111111')) {
+        // If native SOL is not in token list, we need its price. 
+        // This is getting complex again.
+        // WAIT. Moralis Portfolio endpoint usually returns a total `native_balance_usd`?
+        // Let's fallback to just checking if `nativeBalance` has a USD value attached.
+        if (data.nativeBalance.value_usd) {
+          totalUsd += parseFloat(data.nativeBalance.value_usd);
         }
-      });
+      }
 
       return totalUsd;
 

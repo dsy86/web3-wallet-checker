@@ -12,13 +12,18 @@ if (!window.Buffer) {
 }
 
 const DEBANK_TIMEOUT = 850; // DeBank Rate Limit Interval
+const SOLANA_TIMEOUT = 1000; // Moralis Rate Limit Interval (Conservative)
 const DEBANK_API_KEY = process.env.REACT_APP_DEBANK_ACCESS_KEY;
 
 const MnemonicChecker = () => {
   const [mnemonics, setMnemonics] = useState('');
   const [walletData, setWalletData] = useState([]);
   const [comments, setComments] = useState({}); // Address -> Comment
-  const [loading, setLoading] = useState(false);
+
+  // Progress State
+  const [progress, setProgress] = useState({ current: 0, total: 0 });
+  const [isScanning, setIsScanning] = useState(false);
+
   const [loadingMessage, setLoadingMessage] = useState('');
   const [toastMessage, setToastMessage] = useState('');
 
@@ -28,9 +33,13 @@ const MnemonicChecker = () => {
   const [editingComment, setEditingComment] = useState('');
 
   // Queue System
-  const queueRef = React.useRef([]); // Stores tasks: { id, mnemonic, pathIndex }
-  const processingRef = React.useRef(false);
+  const queueRef = React.useRef([]); // EVM Tasks
+  const solanaQueueRef = React.useRef([]); // Solana Tasks
+  const processingRef = React.useRef(false); // EVM Processing Lock
+  const solanaProcessingRef = React.useRef(false); // Solana Processing Lock
   const intervalRef = React.useRef(null);
+  const solanaIntervalRef = React.useRef(null);
+
   const walletsRef = React.useRef({}); // Store EVM wallets to track continuity: { [mnemonicIndex]: { [pathIndex]: balance } }
 
   const showToast = (message) => {
@@ -175,7 +184,7 @@ const MnemonicChecker = () => {
     }
   };
 
-  // Queue Processing Loop
+  // EVM Queue Processing Loop
   React.useEffect(() => {
     intervalRef.current = setInterval(async () => {
       if (queueRef.current.length > 0 && !processingRef.current) {
@@ -240,7 +249,7 @@ const MnemonicChecker = () => {
             }
           }
         } catch (error) {
-          console.warn(`Task failed, retrying: ${task.pathIndex}`, error);
+          console.warn(`EVM Task failed, retrying: ${pathIndex}`, error);
           // Retry: Push back to start or end? End seems safer for rate limit.
           queueRef.current.push(task);
         } finally {
@@ -252,18 +261,71 @@ const MnemonicChecker = () => {
     return () => clearInterval(intervalRef.current);
   }, []);
 
+  // Solana Queue Processing Loop
+  React.useEffect(() => {
+    solanaIntervalRef.current = setInterval(async () => {
+      if (solanaQueueRef.current.length > 0 && !solanaProcessingRef.current) {
+        solanaProcessingRef.current = true;
+        const task = solanaQueueRef.current.shift();
+        const { mnemonicId, mnemonic } = task;
+
+        try {
+          if (bip39.validateMnemonic(mnemonic)) {
+            const keypair = deriveKeypair(mnemonic);
+            const address = keypair.publicKey.toString();
+            loadComment(address);
+
+            const netWorth = await fetchNetWorth(address);
+
+            setWalletData(prevData => [
+              ...prevData,
+              {
+                id: `sol-${mnemonicId}`,
+                mnemonic: mnemonic,
+                address: address,
+                netWorth: netWorth,
+                type: 'SOL',
+                path: 'N/A',
+                links: { solscan: `https://solscan.io/account/${address}` }
+              }
+            ].sort((a, b) => b.netWorth - a.netWorth));
+          }
+
+          // Update Progress
+          setProgress(prev => ({ ...prev, current: prev.current + 1 }));
+
+        } catch (error) {
+          console.warn(`Solana Task failed for ${mnemonicId}, retrying`, error);
+          solanaQueueRef.current.push(task); // Retry
+        } finally {
+          solanaProcessingRef.current = false;
+        }
+      }
+
+      // Check if finished (Solana queue empty and not processing)
+      if (solanaQueueRef.current.length === 0 && !solanaProcessingRef.current && progress.total > 0 && progress.current === progress.total) {
+        setIsScanning(false);
+      }
+
+    }, SOLANA_TIMEOUT);
+    return () => clearInterval(solanaIntervalRef.current);
+  }, [progress.total, progress.current]);
+
   const handleCheckBalances = async () => {
-    setLoading(true);
     setWalletData([]); // Clear previous data
     walletsRef.current = {}; // Clear wallet tracking
 
     // Clear Queue
     queueRef.current = [];
+    solanaQueueRef.current = [];
 
     const mnemonicList = mnemonics
       .split('\n')
       .map(m => m.trim().toLowerCase()) // Convert to lowercase
       .filter(m => m);
+
+    setProgress({ current: 0, total: mnemonicList.length });
+    setIsScanning(true);
 
     // Initial Processing
     for (let i = 0; i < mnemonicList.length; i++) {
@@ -273,44 +335,9 @@ const MnemonicChecker = () => {
       // Add to Queue
       queueRef.current.push({ mnemonicId: i, mnemonic: mnemonic, pathIndex: 0 });
 
-      // --- Solana Check (Existing Logic) ---
-      try {
-        if (bip39.validateMnemonic(mnemonic)) {
-          const keypair = deriveKeypair(mnemonic);
-          const address = keypair.publicKey.toString();
-          loadComment(address); // Load saved comment
-
-          fetchNetWorth(address).then(netWorth => {
-            setWalletData(prevData => [
-              ...prevData,
-              {
-                id: `sol-${i}`,
-                mnemonic: mnemonic,
-                address: address,
-                netWorth: netWorth,
-                type: 'SOL',
-                path: 'N/A', // Solana usually strictly one path per mnemonic in this tool context
-                links: {
-                  solscan: `https://solscan.io/account/${address}`
-                }
-              }
-            ].sort((a, b) => b.netWorth - a.netWorth));
-          });
-        }
-      } catch (e) {
-        console.warn(`Solana derivation failed for ${i}`, e);
-      }
+      // --- Solana Check ---
+      solanaQueueRef.current.push({ mnemonicId: i, mnemonic: mnemonic });
     }
-
-    // We don't really know when everything is done due to recursive EVM nature, 
-    // but the Loop keeps running. Loading state is tricky here. 
-    // We might just leave "Checking..." or change it to "Monitoring...".
-    // For now, we set loading false after initiating initial batch, 
-    // or maybe keep it true until some condition? 
-    // The previous tool just ran a loop and finished. Now we have async queue.
-    // Let's set loading false immediately but show a "Scanning..." indicator elsewhere?
-    // Or just let the user see rows popping in.
-    setLoading(false);
   };
 
   const openEditModal = (address) => {
@@ -363,10 +390,10 @@ const MnemonicChecker = () => {
       />
       <button
         onClick={handleCheckBalances}
-        className={`w-full py-2 rounded text-white font-semibold ${loading ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-500 hover:bg-blue-600'}`}
-        disabled={loading}
+        className={`w-full py-2 rounded text-white font-semibold ${isScanning ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-500 hover:bg-blue-600'}`}
+        disabled={isScanning}
       >
-        {loading ? loadingMessage || 'Initiating Scan...' : 'Check Balances'}
+        {isScanning ? `Checking... (${progress.current}/${progress.total})` : 'Check Balances'}
       </button>
 
       {toastMessage && (

@@ -43,88 +43,77 @@ const MnemonicChecker = () => {
         return 0;
       }
 
-      // Moralis Solana Portfolio Endpoint
-      // Note: This endpoint returns native balance and tokens with prices
-      const response = await fetch(
-        `https://solana-gateway.moralis.io/account/mainnet/${address}/portfolio`,
-        {
-          method: 'GET',
-          headers: {
-            'Accept': 'application/json',
-            'X-API-Key': apiKey,
-          },
-        }
+      const headers = {
+        'Accept': 'application/json',
+        'X-API-Key': apiKey,
+      };
+
+      // 1. Fetch Native SOL Balance
+      // Endpoint: /account/mainnet/{address}/balance
+      const balanceResponse = await fetch(
+        `https://solana-gateway.moralis.io/account/mainnet/${address}/balance`,
+        { method: 'GET', headers }
       );
+      const balanceData = await balanceResponse.json();
+      const solBalance = parseFloat(balanceData.solana || 0);
 
-      if (!response.ok) {
-        throw new Error(`Moralis API error: ${response.statusText}`);
-      }
+      // 2. Fetch SOL Price
+      // Endpoint: /token/mainnet/{address}/price
+      // Wrapped SOL Mint: So11111111111111111111111111111111111111112
+      const solPriceResponse = await fetch(
+        `https://solana-gateway.moralis.io/token/mainnet/So11111111111111111111111111111111111111112/price`,
+        { method: 'GET', headers }
+      );
+      const solPriceData = await solPriceResponse.json();
+      const solPrice = solPriceData.usdPrice || 0;
 
-      const data = await response.json();
+      let totalUsd = solBalance * solPrice;
 
-      // Calculate Total Net Worth from Portfolio Data
-      let totalUsd = 0;
+      // 3. Fetch Token Balances
+      // Endpoint: /account/mainnet/{address}/tokens
+      const tokensResponse = await fetch(
+        `https://solana-gateway.moralis.io/account/mainnet/${address}/tokens`,
+        { method: 'GET', headers }
+      );
+      const tokensData = await tokensResponse.json();
 
-      // 1. Native Balance
-      if (data.nativeBalance && data.nativeBalance.lamports) {
-        // Note: Moralis output structure might vary, checking expected fields
-        // Usually nativeBalance has 'solana' or similar. 
-        // If the endpoint is specific to Solana, it returns object with nativeBalance.
-        // Wait, verified docs say it returns list of tokens and native balance field?
-        // Search result says "returns complete portfolio valuation".
-        // If Moralis returns a total 'total_networth_usd' field, use that.
-        // If not, sum it up.
-        // Based on search [1][3], it includes valuation. 
-        // Let's try to find a 'total_networth_usd' if it exists, otherwise iterate.
+      // 4. Calculate Token Values (Iterate for top tokens)
+      // Note: fetching price for every token might be slow/rate-limited. 
+      // We will only fetch price for tokens that are verified or look legit (not possible spam).
+      // Basic implementation: Promise.all for prices.
+      if (Array.isArray(tokensData) && tokensData.length > 0) {
+        const pricePromises = tokensData.map(async (token) => {
+          // Skip if spam or tiny amount (optional optimization)
+          if (token.possibleSpam) return 0;
 
-        // Actually, let's sum up to be safe as structures vary.
-        const lamports = parseFloat(data.nativeBalance.lamports || 0);
-        // Does it provide SOL price? Usually in 'tokens' list as Wrapped SOL or separate price endpoint.
-        // But Moralis Portfolio often has "native_balance_usd" or similar.
-        // Let's iterate 'tokens' which usually includes native SOL in portfolio view or separate.
-      }
+          try {
+            const tokenPriceResponse = await fetch(
+              `https://solana-gateway.moralis.io/token/mainnet/${token.mint}/price`,
+              { method: 'GET', headers }
+            );
+            const priceData = await tokenPriceResponse.json();
+            const price = priceData.usdPrice || 0;
 
-      // Simpler approach based on standard Moralis responses:
-      // It normally returns a list of tokens. 
-      // If we use the endpoint /portfolio, it might return { tokens: [], nativeBalance: {} }
-
-      // Let's use the tokens list summing.
-      if (data.tokens) {
-        data.tokens.forEach(token => {
-          // total_price_usd usually provided
-          /* 
-            Example:
-            {
-                "mint": "...",
-                "amount": "...",
-                "decimals": 9,
-                "price_usd": 23.4,
-                "value_usd": 105.4
-            }
-          */
-          if (token.value_usd) {
-            totalUsd += parseFloat(token.value_usd);
-          } else if (token.price_usd && token.amount && token.decimals) {
-            totalUsd += (parseFloat(token.amount) / Math.pow(10, token.decimals)) * parseFloat(token.price_usd);
+            // Calculate value
+            const amount = parseFloat(token.amount); // Already adjusted? No, 'tokens' usually returns raw & adjusted.
+            // Step 158 output showed "amount" as adjusted string "0.03".
+            return parseFloat(token.amount) * price;
+          } catch (e) {
+            return 0;
           }
         });
-      }
 
-      // Add Native SQL Value if invalid in tokens list (sometimes native is separate)
-      if (data.nativeBalance && data.nativeBalance.lamports && !data.tokens?.some(t => t.mint === '11111111111111111111111111111111')) {
-        // If native SOL is not in token list, we need its price. 
-        // This is getting complex again.
-        // WAIT. Moralis Portfolio endpoint usually returns a total `native_balance_usd`?
-        // Let's fallback to just checking if `nativeBalance` has a USD value attached.
-        if (data.nativeBalance.value_usd) {
-          totalUsd += parseFloat(data.nativeBalance.value_usd);
-        }
+        const tokenValues = await Promise.all(pricePromises);
+        const totalTokenValue = tokenValues.reduce((a, b) => a + b, 0);
+        totalUsd += totalTokenValue;
       }
 
       return totalUsd;
 
     } catch (error) {
       console.warn(`Failed to fetch net worth for ${address}:`, error);
+      // Return 0 implies failure, but we might have partial data? 
+      // Better to return 0 so user sees something is wrong if total fail.
       return 0;
     }
   };

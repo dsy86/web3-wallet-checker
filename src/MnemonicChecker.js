@@ -224,15 +224,17 @@ const MnemonicChecker = () => {
             walletsRef.current[mnemonicId][pathIndex] = balance;
 
             // Deep Search Logic (Producer)
-            // Modified to stricter Gap Limit = 2 (Stop if 2 consecutive empty)
+            // Modified to Gap Limit = 3 (Stop if 3 consecutive empty) per user request
             // Condition: 
             // 1. Current has balance -> Continue
-            // 2. Previous had balance -> Continue (Allow 1 gap)
-            // 3. Path 0 always checks Path 1
+            // 2. Previous had balance -> Continue (Gap 1)
+            // 3. Pre-Previous had balance -> Continue (Gap 2)
+            // 4. Path 0 always checks Path 1
 
             const prevBalance = walletsRef.current[mnemonicId][pathIndex - 1] || 0;
+            const prevPrevBalance = walletsRef.current[mnemonicId][pathIndex - 2] || 0;
 
-            if (balance > 0 || (pathIndex > 0 && prevBalance > 0) || pathIndex === 0) {
+            if (balance > 0 || (pathIndex > 0 && prevBalance > 0) || (pathIndex >= 2 && prevPrevBalance > 0) || pathIndex === 0) {
               const nextPath = pathIndex + 1;
               queueRef.current.push({ mnemonicId, mnemonic, pathIndex: nextPath });
             }

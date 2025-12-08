@@ -224,28 +224,15 @@ const MnemonicChecker = () => {
             walletsRef.current[mnemonicId][pathIndex] = balance;
 
             // Deep Search Logic (Producer)
-            // Condition: If current > 0, produce next.
-            // Or if previous (path-1) > 0, produce next.
-            // Or if previous-previous (path-2) > 0, produce next.
-            // HTML Logic: `if (balance > 0 || prevBalance > 0 || (path>=2 && prevPrevBalance > 0))`
+            // Modified to stricter Gap Limit = 2 (Stop if 2 consecutive empty)
+            // Condition: 
+            // 1. Current has balance -> Continue
+            // 2. Previous had balance -> Continue (Allow 1 gap)
+            // 3. Path 0 always checks Path 1
 
             const prevBalance = walletsRef.current[mnemonicId][pathIndex - 1] || 0;
-            const prevPrevBalance = walletsRef.current[mnemonicId][pathIndex - 2] || 0;
 
-            if (balance > 0 || (pathIndex > 0 && prevBalance > 0) || (pathIndex >= 2 && prevPrevBalance > 0) || pathIndex === 0) {
-              // Note: pathIndex === 0 always triggers path 1 check if we want to follow strict "check next" logic?
-              // In HTML logic: `GenerateWalletFromMnemonic(path + 1)` is called if `path==0` OR conditions met.
-              // So yes, always start path 1 if we did path 0.
-
-              // Check if next path already in queue to avoid dupes?
-              // Simple check: we just produce path + 1.
-              // We should ensure we don't produce infinitely if balance is 0 but we keep passing checks.
-              // The condition `balance > 0` is key. 
-              // If `path=0` (bal=0), `path=1` is added.
-              // If `path=1` (bal=0), `prev(0)=0`, stop. Correct.
-
-              // Only produce next if we haven't already passed a "stop" point.
-              // Add task to queue
+            if (balance > 0 || (pathIndex > 0 && prevBalance > 0) || pathIndex === 0) {
               const nextPath = pathIndex + 1;
               queueRef.current.push({ mnemonicId, mnemonic, pathIndex: nextPath });
             }

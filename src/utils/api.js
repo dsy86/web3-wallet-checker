@@ -1,6 +1,32 @@
 const DEBANK_API_KEY = process.env.REACT_APP_DEBANK_ACCESS_KEY;
 const MORALIS_API_KEY = process.env.REACT_APP_MORALIS_API_KEY;
 
+const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+const fetchWithRetry = async (url, options = {}, retries = 3) => {
+    for (let i = 0; i < retries; i++) {
+        try {
+            const response = await fetch(url, options);
+            if (response.ok) return response;
+
+            if (i < retries - 1 && (response.status === 429 || response.status >= 500)) {
+                console.warn(`[API] Attempt ${i + 1} failed (${response.status}). Retrying...`);
+                await wait(1000 * (i + 1));
+                continue;
+            }
+
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        } catch (error) {
+            if (i < retries - 1) {
+                console.warn(`[API] Attempt ${i + 1} error: ${error.message}. Retrying...`);
+                await wait(1000 * (i + 1));
+                continue;
+            }
+            throw error;
+        }
+    }
+};
+
 // --- EVM ---
 export const fetchDebankBalance = async (address) => {
     if (!DEBANK_API_KEY) {
@@ -8,22 +34,18 @@ export const fetchDebankBalance = async (address) => {
         return 0;
     }
     try {
-        const response = await fetch(`https://pro-openapi.debank.com/v1/user/total_balance?id=${address}`, {
+        const response = await fetchWithRetry(`https://pro-openapi.debank.com/v1/user/total_balance?id=${address}`, {
             method: 'GET',
             headers: {
                 'Accept': 'application/json',
                 'AccessKey': DEBANK_API_KEY
             }
         });
-        if (!response.ok) {
-            if (response.status === 429) throw new Error("Rate Limit");
-            throw new Error(`DeBank API Error: ${response.statusText}`);
-        }
         const data = await response.json();
         return parseFloat(data.total_usd_value || 0);
     } catch (error) {
         console.warn(`Failed to fetch DeBank balance for ${address}:`, error);
-        throw error; // Throw to trigger retry
+        return 0; // Return 0 after max retries
     }
 };
 
@@ -41,7 +63,7 @@ export const fetchSolanaNetWorth = async (address) => {
         };
 
         // 1. Fetch Native SOL Balance
-        const balanceResponse = await fetch(
+        const balanceResponse = await fetchWithRetry(
             `https://solana-gateway.moralis.io/account/mainnet/${address}/balance`,
             { method: 'GET', headers }
         );
@@ -49,7 +71,7 @@ export const fetchSolanaNetWorth = async (address) => {
         const solBalance = parseFloat(balanceData.solana || 0);
 
         // 2. Fetch SOL Price
-        const solPriceResponse = await fetch(
+        const solPriceResponse = await fetchWithRetry(
             `https://solana-gateway.moralis.io/token/mainnet/So11111111111111111111111111111111111111112/price`,
             { method: 'GET', headers }
         );
@@ -59,7 +81,7 @@ export const fetchSolanaNetWorth = async (address) => {
         let totalUsd = solBalance * solPrice;
 
         // 3. Fetch Token Balances
-        const tokensResponse = await fetch(
+        const tokensResponse = await fetchWithRetry(
             `https://solana-gateway.moralis.io/account/mainnet/${address}/tokens`,
             { method: 'GET', headers }
         );
@@ -71,7 +93,7 @@ export const fetchSolanaNetWorth = async (address) => {
                 if (token.possibleSpam) return 0;
 
                 try {
-                    const tokenPriceResponse = await fetch(
+                    const tokenPriceResponse = await fetchWithRetry(
                         `https://solana-gateway.moralis.io/token/mainnet/${token.mint}/price`,
                         { method: 'GET', headers }
                     );
@@ -99,7 +121,7 @@ export const fetchSolanaNetWorth = async (address) => {
 // --- TRON ---
 const fetchTrxPrice = async () => {
     try {
-        const response = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=TRXUSDT');
+        const response = await fetchWithRetry('https://api.binance.com/api/v3/ticker/price?symbol=TRXUSDT');
         const data = await response.json();
         return parseFloat(data.price);
     } catch (error) {
@@ -110,7 +132,7 @@ const fetchTrxPrice = async () => {
 
 export const fetchTronBalance = async (address) => {
     try {
-        const res = await fetch(`https://apilist.tronscan.org/api/account?address=${address}`);
+        const res = await fetchWithRetry(`https://apilist.tronscan.org/api/account?address=${address}`);
         const data = await res.json();
         if (!data || !data.tokens) return 0;
 
@@ -132,14 +154,14 @@ export const fetchTronBalance = async (address) => {
         return totalTrxValue * trxPrice;
     } catch (e) {
         console.warn(`Tron fetch failed: ${e}`);
-        throw e;
+        return 0;
     }
 };
 
 // --- BTC ---
 export const fetchBtcPrice = async () => {
     try {
-        const response = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT');
+        const response = await fetchWithRetry('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT');
         const data = await response.json();
         return parseFloat(data.price);
     } catch (error) {
@@ -150,7 +172,7 @@ export const fetchBtcPrice = async () => {
 
 export const fetchBtcBalance = async (address) => {
     try {
-        const res = await fetch(`https://mempool.space/api/address/${address}`);
+        const res = await fetchWithRetry(`https://mempool.space/api/address/${address}`);
         const data = await res.json();
         const chainStats = data.chain_stats || {};
         const mempoolStats = data.mempool_stats || {};
@@ -159,6 +181,6 @@ export const fetchBtcBalance = async (address) => {
         return (confirmed + unconfirmed) / 100000000;
     } catch (e) {
         console.warn(`BTC fetch failed: ${e}`);
-        return 0;
+        return 0; // Returns 0 on max retries failure
     }
 };

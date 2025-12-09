@@ -19,10 +19,15 @@ const getCachedPrice = async (key, fetchFn) => {
     return price;
 };
 
-const fetchWithRetry = async (url, options = {}, retries = 3) => {
+const fetchWithRetry = async (url, options = {}, retries = 3, timeout = 5000) => {
     for (let i = 0; i < retries; i++) {
+        const controller = new AbortController();
+        const id = setTimeout(() => controller.abort(), timeout);
+
         try {
-            const response = await fetch(url, options);
+            const response = await fetch(url, { ...options, signal: controller.signal });
+            clearTimeout(id);
+
             if (response.ok) return response;
 
             if (i < retries - 1 && (response.status === 429 || response.status >= 500)) {
@@ -33,8 +38,10 @@ const fetchWithRetry = async (url, options = {}, retries = 3) => {
 
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         } catch (error) {
+            clearTimeout(id);
+            const isTimeout = error.name === 'AbortError';
             if (i < retries - 1) {
-                console.warn(`[API] Attempt ${i + 1} error: ${error.message}. Retrying...`);
+                console.warn(`[API] Attempt ${i + 1} error: ${isTimeout ? 'Timeout (5s)' : error.message}. Retrying...`);
                 await wait(1000 * (i + 1));
                 continue;
             }

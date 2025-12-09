@@ -3,6 +3,22 @@ const MORALIS_API_KEY = process.env.REACT_APP_MORALIS_API_KEY;
 
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Simple in-memory cache: { "BTC": { price: 100000, timestamp: 1234567890 } }
+const priceCache = {};
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+const getCachedPrice = async (key, fetchFn) => {
+    const now = Date.now();
+    if (priceCache[key] && (now - priceCache[key].timestamp < CACHE_TTL)) {
+        return priceCache[key].price;
+    }
+    const price = await fetchFn();
+    if (price > 0) {
+        priceCache[key] = { price, timestamp: now };
+    }
+    return price;
+};
+
 const fetchWithRetry = async (url, options = {}, retries = 3) => {
     for (let i = 0; i < retries; i++) {
         try {
@@ -70,13 +86,15 @@ export const fetchSolanaNetWorth = async (address) => {
         const balanceData = await balanceResponse.json();
         const solBalance = parseFloat(balanceData.solana || 0);
 
-        // 2. Fetch SOL Price
-        const solPriceResponse = await fetchWithRetry(
-            `https://solana-gateway.moralis.io/token/mainnet/So11111111111111111111111111111111111111112/price`,
-            { method: 'GET', headers }
-        );
-        const solPriceData = await solPriceResponse.json();
-        const solPrice = solPriceData.usdPrice || 0;
+        // 2. Fetch SOL Price (Cached)
+        const solPrice = await getCachedPrice('SOL', async () => {
+            const solPriceResponse = await fetchWithRetry(
+                `https://solana-gateway.moralis.io/token/mainnet/So11111111111111111111111111111111111111112/price`,
+                { method: 'GET', headers }
+            );
+            const solPriceData = await solPriceResponse.json();
+            return parseFloat(solPriceData.usdPrice || 0);
+        });
 
         let totalUsd = solBalance * solPrice;
 
@@ -93,12 +111,16 @@ export const fetchSolanaNetWorth = async (address) => {
                 if (token.possibleSpam) return 0;
 
                 try {
-                    const tokenPriceResponse = await fetchWithRetry(
-                        `https://solana-gateway.moralis.io/token/mainnet/${token.mint}/price`,
-                        { method: 'GET', headers }
-                    );
-                    const priceData = await tokenPriceResponse.json();
-                    const price = priceData.usdPrice || 0;
+                    // Cache token prices by Mint Address
+                    const price = await getCachedPrice(`SOL_TOKEN_${token.mint}`, async () => {
+                        const tokenPriceResponse = await fetchWithRetry(
+                            `https://solana-gateway.moralis.io/token/mainnet/${token.mint}/price`,
+                            { method: 'GET', headers }
+                        );
+                        const priceData = await tokenPriceResponse.json();
+                        return parseFloat(priceData.usdPrice || 0);
+                    });
+
                     return parseFloat(token.amount) * price;
                 } catch (e) {
                     return 0;
@@ -120,14 +142,16 @@ export const fetchSolanaNetWorth = async (address) => {
 
 // --- TRON ---
 const fetchTrxPrice = async () => {
-    try {
-        const response = await fetchWithRetry('https://api.binance.com/api/v3/ticker/price?symbol=TRXUSDT');
-        const data = await response.json();
-        return parseFloat(data.price);
-    } catch (error) {
-        console.warn('Failed to fetch TRX price:', error);
-        return 0;
-    }
+    return getCachedPrice('TRX', async () => {
+        try {
+            const response = await fetchWithRetry('https://api.binance.com/api/v3/ticker/price?symbol=TRXUSDT');
+            const data = await response.json();
+            return parseFloat(data.price);
+        } catch (error) {
+            console.warn('Failed to fetch TRX price:', error);
+            return 0;
+        }
+    });
 };
 
 export const fetchTronBalance = async (address) => {
@@ -160,14 +184,16 @@ export const fetchTronBalance = async (address) => {
 
 // --- BTC ---
 export const fetchBtcPrice = async () => {
-    try {
-        const response = await fetchWithRetry('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT');
-        const data = await response.json();
-        return parseFloat(data.price);
-    } catch (error) {
-        console.warn('Failed to fetch BTC price:', error);
-        return 0;
-    }
+    return getCachedPrice('BTC', async () => {
+        try {
+            const response = await fetchWithRetry('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT');
+            const data = await response.json();
+            return parseFloat(data.price);
+        } catch (error) {
+            console.warn('Failed to fetch BTC price:', error);
+            return 0;
+        }
+    });
 };
 
 export const fetchBtcBalance = async (address) => {

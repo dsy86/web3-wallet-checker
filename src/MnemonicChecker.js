@@ -122,6 +122,22 @@ const MnemonicChecker = () => {
     }
   };
 
+  const shorten = (str, len = 6) => {
+    if (!str) return '';
+    if (str.length <= len * 2) return str;
+    return `${str.slice(0, len)}...${str.slice(-len)}`;
+  };
+
+  const logProcess = (network, mnemonic, address, worth = null) => {
+    const shortMnemonic = shorten(mnemonic, 10);
+    const shortAddress = shorten(address, 6);
+    if (worth !== null) {
+      console.log(`[${network}] ✅ Found $${worth.toFixed(2)} | Alloc: ${shortMnemonic} | Addr: ${shortAddress}`);
+    } else {
+      console.log(`[${network}] 🔍 Checking | Alloc: ${shortMnemonic} | Addr: ${shortAddress}`);
+    }
+  };
+
   // EVM Queue
   useEffect(() => {
     intervalRef.current = setInterval(async () => {
@@ -133,8 +149,10 @@ const MnemonicChecker = () => {
         try {
           const address = deriveEvmAddress(mnemonic, pathIndex);
           if (address) {
+            logProcess('EVM', mnemonic, address);
             loadComment(address);
             const balance = await fetchDebankBalance(address);
+            if (balance > 0) logProcess('EVM', mnemonic, address, balance);
 
             setWalletData(prev => {
               const newer = [...prev];
@@ -192,8 +210,10 @@ const MnemonicChecker = () => {
           if (bip39.validateMnemonic(mnemonic)) {
             const keypair = deriveKeypair(mnemonic);
             const address = keypair.publicKey.toString();
+            logProcess('SOL', mnemonic, address);
             loadComment(address);
             const netWorth = await fetchSolanaNetWorth(address);
+            if (netWorth > 0) logProcess('SOL', mnemonic, address, netWorth);
 
             setWalletData(prevData => [
               ...prevData,
@@ -231,8 +251,10 @@ const MnemonicChecker = () => {
         try {
           const address = deriveTronAddress(mnemonic, pathIndex);
           if (address) {
+            logProcess('TRON', mnemonic, address);
             loadComment(address);
             const netWorth = await fetchTronBalance(address);
+            if (netWorth > 0) logProcess('TRON', mnemonic, address, netWorth);
 
             setWalletData(prev => {
               const newer = [...prev];
@@ -284,10 +306,12 @@ const MnemonicChecker = () => {
         try {
           const address = deriveBtcAddress(mnemonic, type, pathIndex);
           if (address) {
+            logProcess('BTC', mnemonic, address);
             loadComment(address);
             const btcBalance = await fetchBtcBalance(address);
             const btcPrice = await fetchBtcPrice();
             const netWorth = btcBalance * btcPrice;
+            if (netWorth > 0) logProcess('BTC', mnemonic, address, netWorth);
 
             setWalletData(prev => {
               const newer = [...prev];

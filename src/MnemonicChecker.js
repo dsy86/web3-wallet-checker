@@ -64,7 +64,7 @@ const MnemonicChecker = () => {
   const tronWalletsRef = useRef({});
   const btcWalletsRef = useRef({});
 
-  const maxProcessedId = useRef(-1);
+  const pendingCountsRef = useRef({});
 
   // Load selections from localStorage
   useEffect(() => {
@@ -161,11 +161,12 @@ const MnemonicChecker = () => {
 
             if (balance > 0 || (pathIndex > 0 && prevBalance > 0) || (pathIndex >= 2 && prevPrevBalance > 0) || pathIndex === 0) {
               queueRef.current.unshift({ mnemonicId, mnemonic, pathIndex: pathIndex + 1 });
+            } else {
+              pendingCountsRef.current[mnemonicId]--;
+              if (pendingCountsRef.current[mnemonicId] === 0) {
+                setProgress(prev => ({ ...prev, current: prev.current + 1 }));
+              }
             }
-          }
-          if (mnemonicId > maxProcessedId.current) {
-            maxProcessedId.current = mnemonicId;
-            setProgress(prev => ({ ...prev, current: mnemonicId + 1 }));
           }
         } catch (error) {
           console.warn(`EVM Task failed: ${pathIndex}`, error);
@@ -202,9 +203,10 @@ const MnemonicChecker = () => {
               }
             ].sort((a, b) => b.netWorth - a.netWorth));
           }
-          if (mnemonicId > maxProcessedId.current) {
-            maxProcessedId.current = mnemonicId;
-            setProgress(prev => ({ ...prev, current: mnemonicId + 1 }));
+
+          pendingCountsRef.current[mnemonicId]--;
+          if (pendingCountsRef.current[mnemonicId] === 0) {
+            setProgress(prev => ({ ...prev, current: prev.current + 1 }));
           }
         } catch (error) {
           console.warn(`Solana Task failed`, error);
@@ -252,11 +254,12 @@ const MnemonicChecker = () => {
 
             if (netWorth > 0 || (pathIndex > 0 && prevBalance > 0) || (pathIndex >= 2 && prevPrevBalance > 0) || pathIndex === 0) {
               tronQueueRef.current.unshift({ mnemonicId, mnemonic, pathIndex: pathIndex + 1 });
+            } else {
+              pendingCountsRef.current[mnemonicId]--;
+              if (pendingCountsRef.current[mnemonicId] === 0) {
+                setProgress(prev => ({ ...prev, current: prev.current + 1 }));
+              }
             }
-          }
-          if (mnemonicId > maxProcessedId.current) {
-            maxProcessedId.current = mnemonicId;
-            setProgress(prev => ({ ...prev, current: mnemonicId + 1 }));
           }
         } catch (e) {
           console.warn(`Tron task failed`, e);
@@ -309,11 +312,12 @@ const MnemonicChecker = () => {
 
             if (netWorth > 0 || (pathIndex > 0 && prevBalance > 0) || (pathIndex >= 2 && prevPrevBalance > 0) || pathIndex === 0) {
               btcQueueRef.current.unshift({ mnemonicId, mnemonic, pathIndex: pathIndex + 1, type });
+            } else {
+              pendingCountsRef.current[mnemonicId]--;
+              if (pendingCountsRef.current[mnemonicId] === 0) {
+                setProgress(prev => ({ ...prev, current: prev.current + 1 }));
+              }
             }
-          }
-          if (mnemonicId > maxProcessedId.current) {
-            maxProcessedId.current = mnemonicId;
-            setProgress(prev => ({ ...prev, current: mnemonicId + 1 }));
           }
         } catch (e) {
           console.warn(`BTC task failed`, e);
@@ -344,7 +348,16 @@ const MnemonicChecker = () => {
 
     const mnemonicList = mnemonics.split('\n').map(m => m.trim().toLowerCase()).filter(m => m);
 
-    maxProcessedId.current = -1;
+    pendingCountsRef.current = {};
+    for (let i = 0; i < mnemonicList.length; i++) {
+      let count = 0;
+      if (selectedNetworks.evm) count++;
+      if (selectedNetworks.sol) count++;
+      if (selectedNetworks.tron) count++;
+      if (selectedNetworks.btc) count += 3;
+      pendingCountsRef.current[i] = count;
+    }
+
     setProgress({ current: 0, total: mnemonicList.length });
     setIsScanning(true);
 

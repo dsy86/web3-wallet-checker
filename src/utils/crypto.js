@@ -10,10 +10,6 @@ import * as ecc from 'tiny-secp256k1';
 
 const ECPair = ECPairFactory(ecc);
 
-if (!window.Buffer) {
-    window.Buffer = Buffer;
-}
-
 // SOLANA
 export const deriveKeypair = (mnemonic) => {
     try {

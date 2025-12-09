@@ -1,19 +1,25 @@
-import React, { useState } from 'react';
-import { Connection, clusterApiUrl, Keypair } from '@solana/web3.js';
+import React, { useState, useEffect, useRef } from 'react';
 import * as bip39 from 'bip39';
-import { derivePath } from 'ed25519-hd-key'; // Helper to derive key from seed using ed25519 standard
-import { Buffer } from 'buffer'; // Ensure Buffer is available for derivation logic
+import {
+  deriveEvmAddress,
+  deriveTronAddress,
+  deriveBtcAddress,
+  deriveKeypair,
+  // deriveSolanaAddress is just deriveKeypair.publicKey.toString()
+} from './utils/crypto';
+import {
+  fetchDebankBalance,
+  fetchSolanaNetWorth,
+  fetchTronBalance,
+  fetchBtcBalance,
+  fetchBtcPrice
+} from './utils/api';
+import WalletRow from './components/WalletRow';
 
-import { ethers } from 'ethers';
-
-// Ensure Buffer is globally available for browser environments that might lack it
-if (!window.Buffer) {
-  window.Buffer = Buffer;
-}
-
-const DEBANK_TIMEOUT = 850; // DeBank Rate Limit Interval
-const SOLANA_TIMEOUT = 1000; // Moralis Rate Limit Interval (Conservative)
-const DEBANK_API_KEY = process.env.REACT_APP_DEBANK_ACCESS_KEY;
+const DEBANK_TIMEOUT = 850;
+const SOLANA_TIMEOUT = 1000;
+const TRON_TIMEOUT = 1000;
+const BTC_TIMEOUT = 600;
 
 const MnemonicChecker = () => {
   const [mnemonics, setMnemonics] = useState('');
@@ -23,8 +29,6 @@ const MnemonicChecker = () => {
   // Progress State
   const [progress, setProgress] = useState({ current: 0, total: 0 });
   const [isScanning, setIsScanning] = useState(false);
-
-  const [loadingMessage, setLoadingMessage] = useState('');
   const [toastMessage, setToastMessage] = useState('');
 
   // Modal State
@@ -32,322 +36,60 @@ const MnemonicChecker = () => {
   const [editingAddress, setEditingAddress] = useState(null);
   const [editingComment, setEditingComment] = useState('');
 
-  // Queue System
-  const queueRef = React.useRef([]); // EVM Tasks
-  const solanaQueueRef = React.useRef([]); // Solana Tasks
-  const processingRef = React.useRef(false); // EVM Processing Lock
-  const solanaProcessingRef = React.useRef(false); // Solana Processing Lock
-  const intervalRef = React.useRef(null);
-  const solanaIntervalRef = React.useRef(null);
+  // Network Selections
+  const [selectedNetworks, setSelectedNetworks] = useState({
+    evm: false,
+    sol: false,
+    tron: false,
+    btc: false
+  });
 
-  const walletsRef = React.useRef({}); // Store EVM wallets to track continuity: { [mnemonicIndex]: { [pathIndex]: balance } }
+  // Queue System
+  const queueRef = useRef([]); // EVM Tasks
+  const solanaQueueRef = useRef([]); // Solana Tasks
+  const tronQueueRef = useRef([]); // Tron Tasks
+  const btcQueueRef = useRef([]); // BTC Tasks
+
+  const processingRef = useRef(false);
+  const solanaProcessingRef = useRef(false);
+  const tronProcessingRef = useRef(false);
+  const btcProcessingRef = useRef(false);
+
+  const intervalRef = useRef(null);
+  const solanaIntervalRef = useRef(null);
+  const tronIntervalRef = useRef(null);
+  const btcIntervalRef = useRef(null);
+
+  const walletsRef = useRef({});
+  const tronWalletsRef = useRef({});
+  const btcWalletsRef = useRef({});
+
+  // Load selections from localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem('selectedNetworks');
+    if (saved) {
+      setSelectedNetworks(JSON.parse(saved));
+    }
+  }, []);
+
+  const toggleNetwork = (net) => {
+    setSelectedNetworks(prev => {
+      const next = { ...prev, [net]: !prev[net] };
+      localStorage.setItem('selectedNetworks', JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const copyToClipboard = (text) => {
+    navigator.clipboard.writeText(text);
+    showToast('Copied to clipboard!');
+  };
 
   const showToast = (message) => {
     setToastMessage(message);
     setTimeout(() => {
-      setToastMessage(''); // Hide the toast after 2 seconds
+      setToastMessage('');
     }, 2000);
-  };
-
-  const deriveKeypair = (mnemonic) => {
-    try {
-      // Convert mnemonic to seed using bip39
-      const seed = bip39.mnemonicToSeedSync(mnemonic);
-      // Derive key using Solana path m/44'/501'/0'/0' with ed25519-hd-key
-      const derivedSeed = derivePath("m/44'/501'/0'/0'", seed).key;
-      return Keypair.fromSeed(derivedSeed);
-    } catch (error) {
-      throw new Error(`Keypair derivation failed: ${error.message}`);
-    }
-  };
-
-  const deriveEvmAddress = (mnemonic, index) => {
-    try {
-      // Standard Ethereum Path: m/44'/60'/0'/0/index
-      const path = `m/44'/60'/0'/0/${index}`;
-
-      // Ethers v6 Syntax
-      const mnemonicObj = ethers.Mnemonic.fromPhrase(mnemonic);
-      const wallet = ethers.HDNodeWallet.fromMnemonic(mnemonicObj, path);
-      return wallet.address;
-    } catch (error) {
-      console.warn(`EVM derivation failed for index ${index}:`, error);
-      return null;
-    }
-  };
-
-  const fetchDebankBalance = async (address) => {
-    if (!DEBANK_API_KEY) {
-      console.error("Missing REACT_APP_DEBANK_ACCESS_KEY. DeBank request aborted.");
-      return 0;
-    }
-    try {
-      const response = await fetch(`https://pro-openapi.debank.com/v1/user/total_balance?id=${address}`, {
-        method: 'GET',
-        headers: {
-          'Accept': 'application/json',
-          'AccessKey': DEBANK_API_KEY
-        }
-      });
-      if (!response.ok) {
-        if (response.status === 429) throw new Error("Rate Limit");
-        throw new Error(`DeBank API Error: ${response.statusText}`);
-      }
-      const data = await response.json();
-      return parseFloat(data.total_usd_value || 0);
-    } catch (error) {
-      console.warn(`Failed to fetch DeBank balance for ${address}:`, error);
-      throw error; // Throw to trigger retry
-    }
-  };
-
-  const fetchNetWorth = async (address) => {
-    try {
-      const apiKey = process.env.REACT_APP_MORALIS_API_KEY;
-      if (!apiKey) {
-        console.warn("Moralis API Key is missing");
-        return 0;
-      }
-
-      const headers = {
-        'Accept': 'application/json',
-        'X-API-Key': apiKey,
-      };
-
-      // 1. Fetch Native SOL Balance
-      // Endpoint: /account/mainnet/{address}/balance
-      const balanceResponse = await fetch(
-        `https://solana-gateway.moralis.io/account/mainnet/${address}/balance`,
-        { method: 'GET', headers }
-      );
-      const balanceData = await balanceResponse.json();
-      const solBalance = parseFloat(balanceData.solana || 0);
-
-      // 2. Fetch SOL Price
-      // Endpoint: /token/mainnet/{address}/price
-      // Wrapped SOL Mint: So11111111111111111111111111111111111111112
-      const solPriceResponse = await fetch(
-        `https://solana-gateway.moralis.io/token/mainnet/So11111111111111111111111111111111111111112/price`,
-        { method: 'GET', headers }
-      );
-      const solPriceData = await solPriceResponse.json();
-      const solPrice = solPriceData.usdPrice || 0;
-
-      let totalUsd = solBalance * solPrice;
-
-      // 3. Fetch Token Balances
-      // Endpoint: /account/mainnet/{address}/tokens
-      const tokensResponse = await fetch(
-        `https://solana-gateway.moralis.io/account/mainnet/${address}/tokens`,
-        { method: 'GET', headers }
-      );
-      const tokensData = await tokensResponse.json();
-
-      // 4. Calculate Token Values (Iterate for top tokens)
-      // Note: fetching price for every token might be slow/rate-limited. 
-      // We will only fetch price for tokens that are verified or look legit (not possible spam).
-      // Basic implementation: Promise.all for prices.
-      if (Array.isArray(tokensData) && tokensData.length > 0) {
-        const pricePromises = tokensData.map(async (token) => {
-          // Skip if spam or tiny amount (optional optimization)
-          if (token.possibleSpam) return 0;
-
-          try {
-            const tokenPriceResponse = await fetch(
-              `https://solana-gateway.moralis.io/token/mainnet/${token.mint}/price`,
-              { method: 'GET', headers }
-            );
-            const priceData = await tokenPriceResponse.json();
-            const price = priceData.usdPrice || 0;
-
-            // Calculate value
-            const amount = parseFloat(token.amount); // Already adjusted? No, 'tokens' usually returns raw & adjusted.
-            // Step 158 output showed "amount" as adjusted string "0.03".
-            return parseFloat(token.amount) * price;
-          } catch (e) {
-            return 0;
-          }
-        });
-
-        const tokenValues = await Promise.all(pricePromises);
-        const totalTokenValue = tokenValues.reduce((a, b) => a + b, 0);
-        totalUsd += totalTokenValue;
-      }
-
-      return totalUsd;
-
-    } catch (error) {
-      console.warn(`Failed to fetch net worth for ${address}:`, error);
-      // Return 0 implies failure, but we might have partial data? 
-      // Better to return 0 so user sees something is wrong if total fail.
-      return 0;
-    }
-  };
-
-  // EVM Queue Processing Loop
-  React.useEffect(() => {
-    intervalRef.current = setInterval(async () => {
-      if (queueRef.current.length > 0 && !processingRef.current) {
-        processingRef.current = true;
-        const task = queueRef.current.shift(); // FIFO
-
-        const { mnemonicId, mnemonic, pathIndex } = task; // mnemonicID is index in mnemonicList
-        console.log(`Processing EVM: ID=${mnemonicId} Path=${pathIndex}`);
-
-        try {
-          const address = deriveEvmAddress(mnemonic, pathIndex);
-          if (address) {
-            // Load Comment
-            loadComment(address);
-
-            const balance = await fetchDebankBalance(address);
-            console.log(`Fetched EVM Balance: ${balance} for ${address}`);
-
-            // Update UI Table
-            setWalletData(prev => {
-              const newer = [...prev];
-              // Check if row already exists (retry case)
-              const existingIdx = newer.findIndex(r => r.id === `evm-${mnemonicId}-${pathIndex}`);
-              const row = {
-                id: `evm-${mnemonicId}-${pathIndex}`,
-                mnemonic: mnemonic,
-                address: address,
-                netWorth: balance,
-                type: 'EVM',
-                path: pathIndex,
-                links: {
-                  debank: `https://debank.com/profile/${address}`,
-                  zerion: `https://app.zerion.io/${address}/overview`,
-                  opensea: `https://opensea.io/${address}`
-                }
-              };
-
-              if (existingIdx !== -1) newer[existingIdx] = row;
-              else newer.push(row);
-
-              return newer.sort((a, b) => b.netWorth - a.netWorth);
-            });
-
-            // Update Wallets Tracking for Continuity
-            if (!walletsRef.current[mnemonicId]) walletsRef.current[mnemonicId] = {};
-            walletsRef.current[mnemonicId][pathIndex] = balance;
-
-            // Deep Search Logic (Producer)
-            // Modified to Gap Limit = 3 (Stop if 3 consecutive empty) per user request
-            // Condition: 
-            // 1. Current has balance -> Continue
-            // 2. Previous had balance -> Continue (Gap 1)
-            // 3. Pre-Previous had balance -> Continue (Gap 2)
-            // 4. Path 0 always checks Path 1
-
-            const prevBalance = walletsRef.current[mnemonicId][pathIndex - 1] || 0;
-            const prevPrevBalance = walletsRef.current[mnemonicId][pathIndex - 2] || 0;
-
-            if (balance > 0 || (pathIndex > 0 && prevBalance > 0) || (pathIndex >= 2 && prevPrevBalance > 0) || pathIndex === 0) {
-              const nextPath = pathIndex + 1;
-              // User Request: Finish current mnemonic paths before moving to next mnemonic.
-              // Use unshift() to add to FRONT of queue (LIFO/DFS), prioritizing this mnemonic's next path.
-              queueRef.current.unshift({ mnemonicId, mnemonic, pathIndex: nextPath });
-            }
-          }
-        } catch (error) {
-          console.warn(`EVM Task failed, retrying: ${pathIndex}`, error);
-          queueRef.current.push(task); // Retry at end
-        } finally {
-          processingRef.current = false;
-        }
-      }
-
-      // Global Completion Check (EVM side)
-      if (queueRef.current.length === 0 && !processingRef.current &&
-        solanaQueueRef.current.length === 0 && !solanaProcessingRef.current &&
-        isScanning) { // only if currently scanning
-        setIsScanning(false);
-      }
-
-    }, DEBANK_TIMEOUT);
-    return () => clearInterval(intervalRef.current);
-  }, [isScanning]);
-
-  // Solana Queue Processing Loop
-  React.useEffect(() => {
-    solanaIntervalRef.current = setInterval(async () => {
-      if (solanaQueueRef.current.length > 0 && !solanaProcessingRef.current) {
-        solanaProcessingRef.current = true;
-        const task = solanaQueueRef.current.shift();
-        const { mnemonicId, mnemonic } = task;
-
-        try {
-          if (bip39.validateMnemonic(mnemonic)) {
-            const keypair = deriveKeypair(mnemonic);
-            const address = keypair.publicKey.toString();
-            loadComment(address);
-
-            const netWorth = await fetchNetWorth(address);
-
-            setWalletData(prevData => [
-              ...prevData,
-              {
-                id: `sol-${mnemonicId}`,
-                mnemonic: mnemonic,
-                address: address,
-                netWorth: netWorth,
-                type: 'SOL',
-                path: 'N/A',
-                links: { solscan: `https://solscan.io/account/${address}` }
-              }
-            ].sort((a, b) => b.netWorth - a.netWorth));
-          }
-
-          // Update Progress
-          setProgress(prev => ({ ...prev, current: prev.current + 1 }));
-
-        } catch (error) {
-          console.warn(`Solana Task failed for ${mnemonicId}, retrying`, error);
-          solanaQueueRef.current.push(task); // Retry
-        } finally {
-          solanaProcessingRef.current = false;
-        }
-      }
-
-      // Global Completion Check (Solana side)
-      if (queueRef.current.length === 0 && !processingRef.current &&
-        solanaQueueRef.current.length === 0 && !solanaProcessingRef.current &&
-        isScanning) {
-        setIsScanning(false);
-      }
-
-    }, SOLANA_TIMEOUT);
-    return () => clearInterval(solanaIntervalRef.current);
-  }, [progress.total, progress.current, isScanning]);
-
-  const handleCheckBalances = async () => {
-    setWalletData([]); // Clear previous data
-    walletsRef.current = {}; // Clear wallet tracking
-
-    // Clear Queue
-    queueRef.current = [];
-    solanaQueueRef.current = [];
-
-    const mnemonicList = mnemonics
-      .split('\n')
-      .map(m => m.trim().toLowerCase()) // Convert to lowercase
-      .filter(m => m);
-
-    setProgress({ current: 0, total: mnemonicList.length });
-    setIsScanning(true);
-
-    // Initial Processing
-    for (let i = 0; i < mnemonicList.length; i++) {
-      const mnemonic = mnemonicList[i];
-
-      // --- EVM Check (Initial Path 0) ---
-      // Add to Queue
-      queueRef.current.push({ mnemonicId: i, mnemonic: mnemonic, pathIndex: 0 });
-
-      // --- Solana Check ---
-      solanaQueueRef.current.push({ mnemonicId: i, mnemonic: mnemonic });
-    }
   };
 
   const openEditModal = (address) => {
@@ -364,18 +106,13 @@ const MnemonicChecker = () => {
       } else {
         localStorage.removeItem(`comment-${editingAddress}`);
       }
-
-      setComments(prev => ({
-        ...prev,
-        [editingAddress]: newComment
-      }));
+      setComments(prev => ({ ...prev, [editingAddress]: newComment }));
     }
     setIsEditModalOpen(false);
     setEditingAddress(null);
     setEditingComment('');
   };
 
-  // Helper to load comment
   const loadComment = (address) => {
     const saved = localStorage.getItem(`comment-${address}`);
     if (saved) {
@@ -383,16 +120,231 @@ const MnemonicChecker = () => {
     }
   };
 
-  const copyToClipboard = (text) => {
-    navigator.clipboard.writeText(text);
-    showToast('Copied to clipboard!');
+  // EVM Queue
+  useEffect(() => {
+    intervalRef.current = setInterval(async () => {
+      if (queueRef.current.length > 0 && !processingRef.current) {
+        processingRef.current = true;
+        const task = queueRef.current.shift();
+        const { mnemonicId, mnemonic, pathIndex } = task;
+
+        try {
+          const address = deriveEvmAddress(mnemonic, pathIndex);
+          if (address) {
+            loadComment(address);
+            const balance = await fetchDebankBalance(address);
+
+            setWalletData(prev => {
+              const newer = [...prev];
+              const existingIdx = newer.findIndex(r => r.id === `evm-${mnemonicId}-${pathIndex}`);
+              const row = {
+                id: `evm-${mnemonicId}-${pathIndex}`,
+                mnemonic, address, netWorth: balance, type: 'EVM', path: pathIndex,
+                links: {
+                  debank: `https://debank.com/profile/${address}`,
+                  zerion: `https://app.zerion.io/${address}/overview`,
+                  opensea: `https://opensea.io/${address}`
+                }
+              };
+              if (existingIdx !== -1) newer[existingIdx] = row;
+              else newer.push(row);
+              return newer.sort((a, b) => b.netWorth - a.netWorth);
+            });
+
+            if (!walletsRef.current[mnemonicId]) walletsRef.current[mnemonicId] = {};
+            walletsRef.current[mnemonicId][pathIndex] = balance;
+
+            const prevBalance = walletsRef.current[mnemonicId][pathIndex - 1] || 0;
+            const prevPrevBalance = walletsRef.current[mnemonicId][pathIndex - 2] || 0;
+
+            if (balance > 0 || (pathIndex > 0 && prevBalance > 0) || (pathIndex >= 2 && prevPrevBalance > 0) || pathIndex === 0) {
+              queueRef.current.unshift({ mnemonicId, mnemonic, pathIndex: pathIndex + 1 });
+            }
+          }
+        } catch (error) {
+          console.warn(`EVM Task failed: ${pathIndex}`, error);
+          queueRef.current.push(task);
+        } finally {
+          processingRef.current = false;
+        }
+      }
+      checkGlobalCompletion();
+    }, DEBANK_TIMEOUT);
+    return () => clearInterval(intervalRef.current);
+  }, [isScanning]);
+
+  // Solana Queue
+  useEffect(() => {
+    solanaIntervalRef.current = setInterval(async () => {
+      if (solanaQueueRef.current.length > 0 && !solanaProcessingRef.current) {
+        solanaProcessingRef.current = true;
+        const task = solanaQueueRef.current.shift();
+        const { mnemonicId, mnemonic } = task;
+
+        try {
+          if (bip39.validateMnemonic(mnemonic)) {
+            const keypair = deriveKeypair(mnemonic);
+            const address = keypair.publicKey.toString();
+            loadComment(address);
+            const netWorth = await fetchSolanaNetWorth(address);
+
+            setWalletData(prevData => [
+              ...prevData,
+              {
+                id: `sol-${mnemonicId}`, mnemonic, address, netWorth, type: 'SOL', path: 'N/A',
+                links: { solscan: `https://solscan.io/account/${address}` }
+              }
+            ].sort((a, b) => b.netWorth - a.netWorth));
+          }
+          setProgress(prev => ({ ...prev, current: prev.current + 1 }));
+        } catch (error) {
+          console.warn(`Solana Task failed`, error);
+          solanaQueueRef.current.push(task);
+        } finally {
+          solanaProcessingRef.current = false;
+        }
+      }
+      checkGlobalCompletion();
+    }, SOLANA_TIMEOUT);
+    return () => clearInterval(solanaIntervalRef.current);
+  }, [progress.total, progress.current, isScanning]);
+
+  // Tron Queue
+  useEffect(() => {
+    tronIntervalRef.current = setInterval(async () => {
+      if (tronQueueRef.current.length > 0 && !tronProcessingRef.current) {
+        tronProcessingRef.current = true;
+        const task = tronQueueRef.current.shift();
+        const { mnemonicId, mnemonic, pathIndex } = task;
+
+        try {
+          const address = deriveTronAddress(mnemonic, pathIndex);
+          if (address) {
+            loadComment(address);
+            const netWorth = await fetchTronBalance(address);
+
+            setWalletData(prev => {
+              const newer = [...prev];
+              const existingIdx = newer.findIndex(r => r.id === `tron-${mnemonicId}-${pathIndex}`);
+              const row = {
+                id: `tron-${mnemonicId}-${pathIndex}`, mnemonic, address, netWorth, type: 'TRON', path: pathIndex,
+                links: { tronscan: `https://tronscan.org/#/address/${address}` }
+              };
+              if (existingIdx !== -1) newer[existingIdx] = row;
+              else newer.push(row);
+              return newer.sort((a, b) => b.netWorth - a.netWorth);
+            });
+
+            if (!tronWalletsRef.current[mnemonicId]) tronWalletsRef.current[mnemonicId] = {};
+            tronWalletsRef.current[mnemonicId][pathIndex] = netWorth;
+
+            const prevBalance = tronWalletsRef.current[mnemonicId][pathIndex - 1] || 0;
+            const prevPrevBalance = tronWalletsRef.current[mnemonicId][pathIndex - 2] || 0;
+
+            if (netWorth > 0 || (pathIndex > 0 && prevBalance > 0) || (pathIndex >= 2 && prevPrevBalance > 0) || pathIndex === 0) {
+              tronQueueRef.current.unshift({ mnemonicId, mnemonic, pathIndex: pathIndex + 1 });
+            }
+          }
+        } catch (e) {
+          console.warn(`Tron task failed`, e);
+          tronQueueRef.current.push(task);
+        } finally {
+          tronProcessingRef.current = false;
+        }
+      }
+      checkGlobalCompletion();
+    }, TRON_TIMEOUT);
+    return () => clearInterval(tronIntervalRef.current);
+  }, [isScanning]);
+
+  // BTC Queue
+  useEffect(() => {
+    btcIntervalRef.current = setInterval(async () => {
+      if (btcQueueRef.current.length > 0 && !btcProcessingRef.current) {
+        btcProcessingRef.current = true;
+        const task = btcQueueRef.current.shift();
+        const { mnemonicId, mnemonic, pathIndex, type } = task;
+
+        try {
+          const address = deriveBtcAddress(mnemonic, type, pathIndex);
+          if (address) {
+            loadComment(address);
+            const btcBalance = await fetchBtcBalance(address);
+            const btcPrice = await fetchBtcPrice();
+            const netWorth = btcBalance * btcPrice;
+
+            setWalletData(prev => {
+              const newer = [...prev];
+              const id = `btc-${type}-${mnemonicId}-${pathIndex}`;
+              const typeLabel = type === 'native' ? 'BTC (Native)' : type === 'nested' ? 'BTC (SegWit)' : 'BTC (Legacy)';
+              const existingIdx = newer.findIndex(r => r.id === id);
+              const row = {
+                id, mnemonic, address, netWorth, type: typeLabel, path: pathIndex,
+                links: { btc: `https://mempool.space/address/${address}` }
+              };
+              if (existingIdx !== -1) newer[existingIdx] = row;
+              else newer.push(row);
+              return newer.sort((a, b) => b.netWorth - a.netWorth);
+            });
+
+            if (!btcWalletsRef.current[mnemonicId]) btcWalletsRef.current[mnemonicId] = {};
+            if (!btcWalletsRef.current[mnemonicId][type]) btcWalletsRef.current[mnemonicId][type] = {};
+            btcWalletsRef.current[mnemonicId][type][pathIndex] = netWorth;
+
+            const prevBalance = btcWalletsRef.current[mnemonicId][type][pathIndex - 1] || 0;
+            const prevPrevBalance = btcWalletsRef.current[mnemonicId][type][pathIndex - 2] || 0;
+
+            if (netWorth > 0 || (pathIndex > 0 && prevBalance > 0) || (pathIndex >= 2 && prevPrevBalance > 0) || pathIndex === 0) {
+              btcQueueRef.current.unshift({ mnemonicId, mnemonic, pathIndex: pathIndex + 1, type });
+            }
+          }
+        } catch (e) {
+          console.warn(`BTC task failed`, e);
+          btcQueueRef.current.push(task);
+        } finally {
+          btcProcessingRef.current = false;
+        }
+      }
+      checkGlobalCompletion();
+    }, BTC_TIMEOUT);
+    return () => clearInterval(btcIntervalRef.current);
+  }, [isScanning]);
+
+  const checkGlobalCompletion = () => {
+    if (queueRef.current.length === 0 && !processingRef.current &&
+      solanaQueueRef.current.length === 0 && !solanaProcessingRef.current &&
+      tronQueueRef.current.length === 0 && !tronProcessingRef.current &&
+      btcQueueRef.current.length === 0 && !btcProcessingRef.current &&
+      isScanning) {
+      setIsScanning(false);
+    }
   };
 
-  // Calculate Total Net Worth
+  const handleCheckBalances = async () => {
+    setWalletData([]);
+    walletsRef.current = {}; tronWalletsRef.current = {}; btcWalletsRef.current = {};
+    queueRef.current = []; solanaQueueRef.current = []; tronQueueRef.current = []; btcQueueRef.current = [];
+
+    const mnemonicList = mnemonics.split('\n').map(m => m.trim().toLowerCase()).filter(m => m);
+    setProgress({ current: 0, total: mnemonicList.length });
+    setIsScanning(true);
+
+    for (let i = 0; i < mnemonicList.length; i++) {
+      const mnemonic = mnemonicList[i];
+      if (selectedNetworks.evm) queueRef.current.push({ mnemonicId: i, mnemonic, pathIndex: 0 });
+      if (selectedNetworks.sol) solanaQueueRef.current.push({ mnemonicId: i, mnemonic });
+      if (selectedNetworks.tron) tronQueueRef.current.push({ mnemonicId: i, mnemonic, pathIndex: 0 });
+      if (selectedNetworks.btc) {
+        btcQueueRef.current.push({ mnemonicId: i, mnemonic, pathIndex: 0, type: 'native' });
+        btcQueueRef.current.push({ mnemonicId: i, mnemonic, pathIndex: 0, type: 'nested' });
+        btcQueueRef.current.push({ mnemonicId: i, mnemonic, pathIndex: 0, type: 'legacy' });
+      }
+    }
+  };
+
   const totalNetWorth = walletData.reduce((acc, curr) => acc + curr.netWorth, 0);
 
-  // Update Page Title with Total Net Worth
-  React.useEffect(() => {
+  useEffect(() => {
     document.title = `Total: $${totalNetWorth.toFixed(2)} - Wallet Checker`;
   }, [totalNetWorth]);
 
@@ -401,7 +353,7 @@ const MnemonicChecker = () => {
       <div className="flex justify-between items-center mb-4">
         <h1 className="text-2xl font-bold text-gray-800">Wallet Net Worth Checker (SOL & EVM)</h1>
         <div className="bg-green-100 px-4 py-2 rounded-lg shadow border border-green-300">
-          <span className="text-gray-600 font-semibold mr-2">Total Net Worth:</span>
+          <span className="text-gray-600 font-semibold mr-2">Total:</span>
           <span className="text-2xl font-bold text-green-700 font-mono">${totalNetWorth.toFixed(2)}</span>
         </div>
       </div>
@@ -412,6 +364,14 @@ const MnemonicChecker = () => {
         onChange={(e) => setMnemonics(e.target.value)}
         placeholder="Enter your mnemonics, one per line"
       />
+
+      <div className="flex space-x-6 mb-4 p-2 bg-white rounded border border-gray-200">
+        <label className="flex items-center space-x-2 cursor-pointer"><input type="checkbox" checked={selectedNetworks.evm} onChange={() => toggleNetwork('evm')} className="form-checkbox h-5 w-5 text-blue-600" /><span className="text-gray-700">EVM</span></label>
+        <label className="flex items-center space-x-2 cursor-pointer"><input type="checkbox" checked={selectedNetworks.sol} onChange={() => toggleNetwork('sol')} className="form-checkbox h-5 w-5 text-green-600" /><span className="text-gray-700">SOLANA</span></label>
+        <label className="flex items-center space-x-2 cursor-pointer"><input type="checkbox" checked={selectedNetworks.tron} onChange={() => toggleNetwork('tron')} className="form-checkbox h-5 w-5 text-red-600" /><span className="text-gray-700">TRON</span></label>
+        <label className="flex items-center space-x-2 cursor-pointer"><input type="checkbox" checked={selectedNetworks.btc} onChange={() => toggleNetwork('btc')} className="form-checkbox h-5 w-5 text-yellow-600" /><span className="text-gray-700">BTC</span></label>
+      </div>
+
       <button
         onClick={handleCheckBalances}
         className={`w-full py-2 rounded text-white font-semibold ${isScanning ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-500 hover:bg-blue-600'}`}
@@ -426,7 +386,6 @@ const MnemonicChecker = () => {
         </div>
       )}
 
-      {/* Edit Comment Modal */}
       {isEditModalOpen && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white p-6 rounded-lg shadow-xl w-96">
@@ -440,18 +399,8 @@ const MnemonicChecker = () => {
               placeholder="Enter comment..."
             />
             <div className="flex justify-end space-x-2">
-              <button
-                onClick={() => setIsEditModalOpen(false)}
-                className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={saveComment}
-                className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
-              >
-                Save
-              </button>
+              <button onClick={() => setIsEditModalOpen(false)} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">Cancel</button>
+              <button onClick={saveComment} className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600">Save</button>
             </div>
           </div>
         </div>
@@ -464,63 +413,21 @@ const MnemonicChecker = () => {
               <th className="py-2 px-4 border">Mnemonic</th>
               <th className="py-2 px-4 border">Type</th>
               <th className="py-2 px-4 border">Path</th>
-              <th className="py-2 px-4 border">Wallet Address</th>
-              <th className="py-2 px-4 border">Net Worth ($)</th>
+              <th className="py-2 px-4 border">Addr</th>
+              <th className="py-2 px-4 border">Worth</th>
               <th className="py-2 px-4 border">Links</th>
               <th className="py-2 px-4 border">Comment</th>
             </tr>
           </thead>
           <tbody>
             {walletData.map((data, index) => (
-              <tr key={index} className="even:bg-gray-100 odd:bg-white hover:bg-blue-50">
-                <td
-                  className="py-2 px-4 border cursor-pointer hover:text-blue-600 truncate max-w-xs"
-                  onClick={() => copyToClipboard(data.mnemonic)}
-                  title={data.mnemonic}
-                >
-                  {data.mnemonic.length > 20 ? data.mnemonic.slice(0, 10) + '...' + data.mnemonic.slice(-10) : data.mnemonic}
-                </td>
-                <td className="py-2 px-4 border text-center font-bold">
-                  <span className={data.type === 'SOL' ? 'text-green-600' : 'text-purple-600'}>{data.type}</span>
-                </td>
-                <td className="py-2 px-4 border text-center">
-                  {data.path}
-                </td>
-                <td
-                  className="py-2 px-4 border cursor-pointer hover:text-blue-600 truncate max-w-xs"
-                  onClick={() => copyToClipboard(data.address)}
-                  title={data.address}
-                >
-                  {data.address.slice(0, 8) + '...' + data.address.slice(-8)}
-                </td>
-                <td className="py-2 px-4 border text-center font-mono">
-                  ${data.netWorth.toFixed(2)}
-                </td>
-                <td className="py-2 px-4 border text-center space-x-2">
-                  {data.links.solscan && (
-                    <a href={data.links.solscan} target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">Solscan</a>
-                  )}
-                  {data.links.debank && (
-                    <a href={data.links.debank} target="_blank" rel="noreferrer" className="text-orange-500 hover:underline">DeBank</a>
-                  )}
-                  {data.links.opensea && (
-                    <a href={data.links.opensea} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">OpenSea</a>
-                  )}
-                </td>
-                <td className="py-2 px-4 border text-center">
-                  <div className="flex items-center justify-between space-x-2">
-                    <span className="truncate max-w-[150px] text-gray-700" title={comments[data.address]}>
-                      {comments[data.address] || ''}
-                    </span>
-                    <button
-                      onClick={() => openEditModal(data.address)}
-                      className="text-gray-400 hover:text-blue-500"
-                    >
-                      ✏️
-                    </button>
-                  </div>
-                </td>
-              </tr>
+              <WalletRow
+                key={index}
+                data={data}
+                comment={comments[data.address]}
+                onCopy={copyToClipboard}
+                onEdit={openEditModal}
+              />
             ))}
           </tbody>
         </table>

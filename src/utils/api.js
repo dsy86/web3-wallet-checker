@@ -50,6 +50,23 @@ const fetchWithRetry = async (url, options = {}, retries = 3, timeout = 5000) =>
     }
 };
 
+// --- BINANCE HELPER ---
+const fetchBinancePrice = async (symbol) => {
+    // Symbol e.g., 'BTCUSDT', 'TRXUSDT', 'SOLUSDT'
+    const cleanSymbol = symbol.toUpperCase();
+    // Use cache key based on symbol, e.g. "PRICE_BTCUSDT"
+    return getCachedPrice(`PRICE_${cleanSymbol}`, async () => {
+        try {
+            const response = await fetchWithRetry(`https://api.binance.com/api/v3/ticker/price?symbol=${cleanSymbol}`);
+            const data = await response.json();
+            return parseFloat(data.price);
+        } catch (error) {
+            console.warn(`Failed to fetch Binance price for ${cleanSymbol}:`, error);
+            return 0;
+        }
+    });
+};
+
 // --- EVM ---
 export const fetchDebankBalance = async (address) => {
     if (!DEBANK_API_KEY) {
@@ -68,7 +85,7 @@ export const fetchDebankBalance = async (address) => {
         return parseFloat(data.total_usd_value || 0);
     } catch (error) {
         console.warn(`Failed to fetch DeBank balance for ${address}:`, error);
-        return 0; // Return 0 after max retries
+        return null; // Return null on max retries failure
     }
 };
 
@@ -93,15 +110,8 @@ export const fetchSolanaNetWorth = async (address) => {
         const balanceData = await balanceResponse.json();
         const solBalance = parseFloat(balanceData.solana || 0);
 
-        // 2. Fetch SOL Price (Cached)
-        const solPrice = await getCachedPrice('SOL', async () => {
-            const solPriceResponse = await fetchWithRetry(
-                `https://solana-gateway.moralis.io/token/mainnet/So11111111111111111111111111111111111111112/price`,
-                { method: 'GET', headers }
-            );
-            const solPriceData = await solPriceResponse.json();
-            return parseFloat(solPriceData.usdPrice || 0);
-        });
+        // 2. Fetch SOL Price (Binance)
+        const solPrice = await fetchBinancePrice('SOLUSDT');
 
         let totalUsd = solBalance * solPrice;
 
@@ -143,22 +153,13 @@ export const fetchSolanaNetWorth = async (address) => {
 
     } catch (error) {
         console.warn(`Failed to fetch net worth for ${address}:`, error);
-        return 0;
+        return null;
     }
 };
 
 // --- TRON ---
 const fetchTrxPrice = async () => {
-    return getCachedPrice('TRX', async () => {
-        try {
-            const response = await fetchWithRetry('https://api.binance.com/api/v3/ticker/price?symbol=TRXUSDT');
-            const data = await response.json();
-            return parseFloat(data.price);
-        } catch (error) {
-            console.warn('Failed to fetch TRX price:', error);
-            return 0;
-        }
-    });
+    return fetchBinancePrice('TRXUSDT');
 };
 
 export const fetchTronBalance = async (address) => {
@@ -185,22 +186,13 @@ export const fetchTronBalance = async (address) => {
         return totalTrxValue * trxPrice;
     } catch (e) {
         console.warn(`Tron fetch failed: ${e}`);
-        return 0;
+        return null;
     }
 };
 
 // --- BTC ---
 export const fetchBtcPrice = async () => {
-    return getCachedPrice('BTC', async () => {
-        try {
-            const response = await fetchWithRetry('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT');
-            const data = await response.json();
-            return parseFloat(data.price);
-        } catch (error) {
-            console.warn('Failed to fetch BTC price:', error);
-            return 0;
-        }
-    });
+    return fetchBinancePrice('BTCUSDT');
 };
 
 export const fetchBtcBalance = async (address) => {
@@ -214,6 +206,6 @@ export const fetchBtcBalance = async (address) => {
         return (confirmed + unconfirmed) / 100000000;
     } catch (e) {
         console.warn(`BTC fetch failed: ${e}`);
-        return 0; // Returns 0 on max retries failure
+        return null; // Returns null on max retries failure
     }
 };

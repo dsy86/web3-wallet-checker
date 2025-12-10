@@ -1,6 +1,6 @@
 import React from 'react';
 
-const WalletRow = ({ data, comment, onCopy, onEdit }) => {
+const WalletRow = ({ data, comment, onCopy, onEdit, onRetry }) => {
     return (
         <tr className="even:bg-gray-100 odd:bg-white hover:bg-blue-50">
             <td
@@ -23,8 +23,20 @@ const WalletRow = ({ data, comment, onCopy, onEdit }) => {
             >
                 {data.address.slice(0, 8) + '...' + data.address.slice(-8)}
             </td>
-            <td className="py-2 px-4 border text-center font-mono">
-                ${data.netWorth.toFixed(2)}
+            <td className="py-2 px-4 border text-center font-mono flex items-center justify-center space-x-2">
+                <span>${data.netWorth.toFixed(2)}</span>
+                {data.isError && !data.isRetrying && (
+                    <button
+                        onClick={(e) => { e.stopPropagation(); onRetry(data); }}
+                        title="Retry Failed Request"
+                        className="text-red-500 hover:text-red-700 hover:bg-red-50 rounded-full p-1 transition-colors"
+                    >
+                        🔄
+                    </button>
+                )}
+                {data.isRetrying && (
+                    <span className="animate-spin inline-block text-blue-500">⌛</span>
+                )}
             </td>
             <td className="py-2 px-4 border text-center space-x-2">
                 {data.links.solscan && (

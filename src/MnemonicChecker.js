@@ -138,6 +138,47 @@ const MnemonicChecker = () => {
     }
   };
 
+
+
+  const retryOneWallet = async (walletDataRow) => {
+    const { address, mnemonic, type, id } = walletDataRow;
+    let newWorth = null;
+
+    setWalletData(prev => prev.map(r => r.id === id ? { ...r, isRetrying: true } : r));
+    logProcess('RETRY', mnemonic, address);
+
+    try {
+      if (type === 'EVM') {
+        newWorth = await fetchDebankBalance(address);
+      } else if (type === 'SOL') {
+        newWorth = await fetchSolanaNetWorth(address);
+      } else if (type === 'TRON') {
+        newWorth = await fetchTronBalance(address);
+      } else if (type.includes('BTC')) {
+        const btcBalance = await fetchBtcBalance(address);
+        const btcPrice = await fetchBtcPrice();
+        if (btcBalance !== null && btcPrice) {
+          newWorth = btcBalance * btcPrice;
+        } else {
+          newWorth = null;
+        }
+      }
+    } catch (e) {
+      console.warn("Manual retry failed", e);
+      newWorth = null;
+    }
+
+    setWalletData(prev => prev.map(r => {
+      if (r.id !== id) return r;
+      if (newWorth !== null) {
+        logProcess('RETRY', mnemonic, address, newWorth);
+        return { ...r, netWorth: newWorth, isError: false, isRetrying: false };
+      } else {
+        return { ...r, isError: true, isRetrying: false };
+      }
+    }));
+  };
+
   // EVM Queue
   useEffect(() => {
     intervalRef.current = setInterval(async () => {
@@ -152,14 +193,15 @@ const MnemonicChecker = () => {
             logProcess('EVM', mnemonic, address);
             loadComment(address);
             const balance = await fetchDebankBalance(address);
-            if (balance > 0) logProcess('EVM', mnemonic, address, balance);
+            if (balance !== null && balance > 0) logProcess('EVM', mnemonic, address, balance);
 
             setWalletData(prev => {
               const newer = [...prev];
               const existingIdx = newer.findIndex(r => r.id === `evm-${mnemonicId}-${pathIndex}`);
               const row = {
                 id: `evm-${mnemonicId}-${pathIndex}`,
-                mnemonic, address, netWorth: balance, type: 'EVM', path: pathIndex,
+                mnemonic, address, netWorth: balance === null ? 0 : balance, type: 'EVM', path: pathIndex,
+                isError: balance === null,
                 links: {
                   debank: `https://debank.com/profile/${address}`,
                   zerion: `https://app.zerion.io/${address}/overview`,
@@ -213,12 +255,13 @@ const MnemonicChecker = () => {
             logProcess('SOL', mnemonic, address);
             loadComment(address);
             const netWorth = await fetchSolanaNetWorth(address);
-            if (netWorth > 0) logProcess('SOL', mnemonic, address, netWorth);
+            if (netWorth !== null && netWorth > 0) logProcess('SOL', mnemonic, address, netWorth);
 
             setWalletData(prevData => [
               ...prevData,
               {
-                id: `sol-${mnemonicId}`, mnemonic, address, netWorth, type: 'SOL', path: 'N/A',
+                id: `sol-${mnemonicId}`, mnemonic, address, netWorth: netWorth === null ? 0 : netWorth, type: 'SOL', path: '-',
+                isError: netWorth === null,
                 links: { solscan: `https://solscan.io/account/${address}` }
               }
             ].sort((a, b) => b.netWorth - a.netWorth));
@@ -254,13 +297,14 @@ const MnemonicChecker = () => {
             logProcess('TRON', mnemonic, address);
             loadComment(address);
             const netWorth = await fetchTronBalance(address);
-            if (netWorth > 0) logProcess('TRON', mnemonic, address, netWorth);
+            if (netWorth !== null && netWorth > 0) logProcess('TRON', mnemonic, address, netWorth);
 
             setWalletData(prev => {
               const newer = [...prev];
               const existingIdx = newer.findIndex(r => r.id === `tron-${mnemonicId}-${pathIndex}`);
               const row = {
-                id: `tron-${mnemonicId}-${pathIndex}`, mnemonic, address, netWorth, type: 'TRON', path: pathIndex,
+                id: `tron-${mnemonicId}-${pathIndex}`, mnemonic, address, netWorth: netWorth === null ? 0 : netWorth, type: 'TRON', path: pathIndex,
+                isError: netWorth === null,
                 links: { tronscan: `https://tronscan.org/#/address/${address}` }
               };
               if (existingIdx !== -1) newer[existingIdx] = row;
@@ -310,8 +354,16 @@ const MnemonicChecker = () => {
             loadComment(address);
             const btcBalance = await fetchBtcBalance(address);
             const btcPrice = await fetchBtcPrice();
-            const netWorth = btcBalance * btcPrice;
-            if (netWorth > 0) logProcess('BTC', mnemonic, address, netWorth);
+
+            let netWorth = 0;
+            let isError = false;
+
+            if (btcBalance !== null) {
+              netWorth = btcBalance * (btcPrice || 0);
+              if (netWorth > 0) logProcess('BTC', mnemonic, address, netWorth);
+            } else {
+              isError = true;
+            }
 
             setWalletData(prev => {
               const newer = [...prev];
@@ -320,6 +372,7 @@ const MnemonicChecker = () => {
               const existingIdx = newer.findIndex(r => r.id === id);
               const row = {
                 id, mnemonic, address, netWorth, type: typeLabel, path: pathIndex,
+                isError,
                 links: { btc: `https://mempool.space/address/${address}` }
               };
               if (existingIdx !== -1) newer[existingIdx] = row;
@@ -483,6 +536,7 @@ const MnemonicChecker = () => {
                 comment={comments[data.address]}
                 onCopy={copyToClipboard}
                 onEdit={openEditModal}
+                onRetry={retryOneWallet}
               />
             ))}
           </tbody>

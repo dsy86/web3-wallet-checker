@@ -196,16 +196,57 @@ export const fetchBtcPrice = async () => {
 };
 
 export const fetchBtcBalance = async (address) => {
-    try {
-        const res = await fetchWithRetry(`https://mempool.space/api/address/${address}`);
-        const data = await res.json();
-        const chainStats = data.chain_stats || {};
-        const mempoolStats = data.mempool_stats || {};
-        const confirmed = (chainStats.funded_txo_sum || 0) - (chainStats.spent_txo_sum || 0);
-        const unconfirmed = (mempoolStats.funded_txo_sum || 0) - (mempoolStats.spent_txo_sum || 0);
-        return (confirmed + unconfirmed) / 100000000;
-    } catch (e) {
-        console.warn(`BTC fetch failed: ${e}`);
-        return null; // Returns null on max retries failure
+    const PROVIDERS = [
+        {
+            name: 'Mempool',
+            url: `https://mempool.space/api/address/${address}`,
+            type: 'esplora'
+        },
+        {
+            name: 'Blockstream',
+            url: `https://blockstream.info/api/address/${address}`,
+            type: 'esplora'
+        },
+        {
+            name: 'Blockchain.info',
+            url: `https://blockchain.info/q/addressbalance/${address}`,
+            type: 'plaintext'
+        }
+    ];
+
+    // Shuffle providers to distribute load (Round-Robin-ish)
+    // But keep Blockchain.info last as it has strict limits? 
+    // Actually, mixing them is better if limits are per-IP.
+    // Let's randomize the first two (Esplora) and keep Blockchain.info as backup
+    const esploraProviders = PROVIDERS.slice(0, 2).sort(() => Math.random() - 0.5);
+    const sortedProviders = [...esploraProviders, PROVIDERS[2]];
+
+    for (const provider of sortedProviders) {
+        try {
+            // Lower timeout/retries for individual provider attempts to fail fast so we can try others
+            // explicitly passing params to fetchWithRetry to not retry internally too many times
+            const res = await fetchWithRetry(provider.url, {}, 1, 3000);
+
+            if (provider.type === 'esplora') {
+                const data = await res.json();
+                const chainStats = data.chain_stats || {};
+                const mempoolStats = data.mempool_stats || {};
+                const confirmed = (chainStats.funded_txo_sum || 0) - (chainStats.spent_txo_sum || 0);
+                const unconfirmed = (mempoolStats.funded_txo_sum || 0) - (mempoolStats.spent_txo_sum || 0);
+                return (confirmed + unconfirmed) / 100000000;
+            } else if (provider.type === 'plaintext') {
+                const data = await res.text();
+                const satoshis = parseInt(data, 10);
+                if (isNaN(satoshis)) throw new Error("Invalid response");
+                return satoshis / 100000000;
+            }
+        } catch (e) {
+            console.warn(`BTC fetch failed on ${provider.name}:`, e.message);
+            // Continue to next provider
+            continue;
+        }
     }
+
+    console.warn(`All BTC providers failed for ${address}`);
+    return null;
 };

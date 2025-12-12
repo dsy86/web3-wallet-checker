@@ -1,9 +1,0 @@
-[build]
-builder = "nixpacks"
-
-[deploy]
-startCommand = "npm run start:production"
-restartPolicyType = "never"
-
-[variables]
-NODE_ENV = "production"

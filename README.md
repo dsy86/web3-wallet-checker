@@ -53,32 +53,48 @@ npm start
 
 访问 [http://localhost:3000](http://localhost:3000) 查看应用。
 
-### 构建生产版本
-
 ```bash
 npm run build
 ```
 
-## 🚀 一键部署到 Railway
-
-[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/3qIqwI?referralCode=fNWlAp)
-
-### 手动部署步骤
-
-1. **登录 Railway**: 访问 [railway.app](https://railway.app) 并登录
-2. **连接 GitHub**: 授权 Railway 访问你的 GitHub 仓库
-3. **导入项目**:
-   - 点击 "New Project"
-   - 选择 "Deploy from GitHub repo"
-   - 选择此仓库
-4. **自动部署**: Railway 会自动检测配置并开始部署
-5. **访问应用**: 部署完成后，Railway 会提供一个公共 URL
-
-### 本地测试生产构建
-
+## ☁️ 部署到 Cloudflare Pages
+ 
+本项目推荐部署到 Cloudflare Pages，支持自动化构建和全球 CDN 加速。
+ 
+### 1. 准备工作
+ 
+- 注册/登录 [Cloudflare Dashboard](https://dash.cloudflare.com/)
+- 将本项目 Fork 或 Push 到你的 GitHub 仓库
+ 
+### 2. 创建项目
+ 
+1. 进入 Cloudflare Pages 面板
+2. 点击 "Connect to Git"
+3. 选择你的仓库
+ 
+### 3. 构建配置
+ 
+Cloudflare 会自动检测 React 项目，请确认以下配置：
+ 
+- **Framework Preset**: Create React App
+- **Build command**: `npm run build`
+- **Build output directory**: `build`
+ 
+### 4. 环境变量
+ 
+在构建设置中添加以下环境变量（Security > Environment variables）：
+ 
+- `REACT_APP_DEBANK_ACCESS_KEY`: 您的 DeBank Open API Key
+- `REACT_APP_MORALIS_API_KEY`: 您的 Moralis API Key
+- `NODE_VERSION`: `18` (推荐)
+ 
+> **注意**: 如果使用 `wrangler` 命令行工具直接上传部署，需要将这些变量写入本地 `.env` 文件，因为后台变量仅在云端构建时生效。
+ 
+### 本地预览构建
+ 
 ```bash
 npm run build
-npm run start:production
+npx serve -s build
 ```
 
 ## 📋 使用说明
@@ -120,14 +136,6 @@ bip39.validateMnemonic(mnemonic)
 ```javascript
 connection.getBalance(publicKey)
 ```
-
-### 部署配置
-
-项目包含完整的 Railway 部署配置：
-- `railway.toml` - Railway 平台配置
-- `nixpacks.toml` - Nixpacks 构建配置
-- `serve.json` - 静态文件服务配置
-- `package.json` 中的 `start:production` 脚本
 
 ## 📁 项目结构
 

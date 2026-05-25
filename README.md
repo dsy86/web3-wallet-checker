@@ -1,23 +1,26 @@
-# Solana Wallet Balance Checker
+# Web3 Wallet Net Worth Checker
 
 [中文说明 (Chinese Version)](./README_cn.md)
 
-A React-based Web Application for batch checking SOL balances of Solana wallets. Quickly view balance information for corresponding wallet addresses by inputting a list of mnemonic phrases.
+A React-based web application for batch checking wallet net worth across multiple networks from mnemonic phrases. It supports Solana, EVM, TRON, BTC, and HyperCore portfolio checks.
 
 ## 🎯 Features
 
-- **Batch Balance Query**: Support checking SOL balances for multiple wallets simultaneously.
+- **Batch Net Worth Query**: Support checking multiple wallets and networks simultaneously.
+- **Network Selection**: Choose which networks to query with checkboxes: EVM, Solana, TRON, BTC, and HyperCore.
 - **Mnemonic Validation**: Validate mnemonics using the BIP39 standard.
+- **Deep Address Discovery**: For EVM-like networks, starts from path index `0` and continues to deeper addresses when a wallet has net worth.
+- **HyperCore Portfolio Query**: Uses Hyperliquid public info APIs and reads `summary.accountValueUsd` as HyperCore net worth.
 - **Real-time Display**: Show results in real-time during the query process for immediate feedback.
-- **Sorted Results**: Automatically sort results from highest balance to lowest.
+- **Sorted Results**: Automatically sort results from highest net worth to lowest.
 - **One-click Copy**: Click to copy mnemonics or wallet addresses.
 - **Responsive Design**: Modern interface built with Tailwind CSS.
 
 ## 🔧 Tech Stack
 
 - **Frontend**: React 18 + Tailwind CSS
-- **Blockchain**: Solana Web3.js
-- **Encryption**: BIP39 + ed25519-hd-key
+- **Blockchain**: Solana Web3.js, ethers, bitcoinjs-lib, Hyperliquid info API
+- **Encryption**: BIP39 + ed25519-hd-key + EVM/BTC HD derivation
 - **Build Tools**: Create React App + react-app-rewired
 
 ## 🚀 Quick Start
@@ -40,12 +43,14 @@ npm install
 cp .env.example .env.local
 ```
 
-2. Edit `.env.local` to configure Solana RPC endpoint (optional):
+2. Edit `.env.local` to configure API keys and Solana RPC endpoint:
 ```bash
 REACT_APP_SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
+REACT_APP_DEBANK_ACCESS_KEY=your_debank_api_key
+REACT_APP_MORALIS_API_KEY=your_moralis_api_key
 ```
 
-**Note**: Uses a free public RPC endpoint by default. For better performance, consider using private endpoints from services like [QuickNode](https://www.quicknode.com/) or [Alchemy](https://www.alchemy.com/).
+**Note**: HyperCore uses the public Hyperliquid info API and does not require an API key. EVM net worth requires DeBank, and Solana net worth requires Moralis.
 
 ### Run Development Server
 
@@ -84,7 +89,8 @@ Add the following environment variables in build settings (Security > Environmen
 
 - `REACT_APP_DEBANK_ACCESS_KEY`: Your DeBank Open API Key
 - `REACT_APP_MORALIS_API_KEY`: Your Moralis API Key
-- `NODE_VERSION`: `18` (Recommended)
+- `REACT_APP_SOLANA_RPC_URL`: Optional Solana RPC URL
+- `NODE_VERSION`: `20` (Recommended for the current Cloudflare Pages build image)
 
 > **Note**: If deploying via direct upload using the `wrangler` CLI, you need to write these variables to a local `.env` file, as dashboard variables only take effect during cloud builds.
 
@@ -98,28 +104,38 @@ npx serve -s build
 ## 📋 Usage Instructions
 
 1. **Input Mnemonics**: Enter mnemonic phrases in the text area, one per line.
-2. **Start Query**: Click the "Check Balances" button to start batch querying.
-3. **View Results**: Results are displayed in real-time in the table, including:
+2. **Select Networks**: Check the networks you want to query: EVM, Solana, TRON, BTC, and/or HyperCore.
+3. **Start Query**: Click the "Check Balances" button to start batch querying.
+4. **View Results**: Results are displayed in real-time in the table, including:
    - Mnemonic (Click to copy)
    - Wallet Address (Click to copy)
-   - SOL Balance
-4. **Sorted Display**: Results are automatically sorted by balance from high to low.
+   - Network type
+   - Path index
+   - Net worth in USD
+5. **Sorted Display**: Results are automatically sorted by net worth from high to low.
 
 ## 🔐 Security Note
 
 - **Local Processing**: All mnemonic processing is done locally in the browser.
 - **No Data Storage**: The app does not store any mnemonic or private key information.
 - **Read-only**: The app only reads balance information and does not execute any transactions.
-- **Secure Connection**: Connects to trusted Solana RPC nodes via HTTPS.
+- **Secure Connection**: Connects to external portfolio and chain APIs via HTTPS.
 
 ## 🛠 Technical Implementation
 
 ### Wallet Derivation
 
-Uses the standard Solana wallet derivation path:
+Solana uses the standard derivation path:
 ```
 m/44'/501'/0'/0'
 ```
+
+EVM and HyperCore use EVM-compatible addresses derived from:
+```
+m/44'/60'/0'/0/{index}
+```
+
+TRON and BTC use their own derivation paths in `src/utils/crypto.js`.
 
 ### Mnemonic Validation
 
@@ -128,12 +144,13 @@ Validates mnemonics using BIP39 standard:
 bip39.validateMnemonic(mnemonic)
 ```
 
-### Balance Query
+### Net Worth Query
 
-Connects to Solana mainnet to query real-time balance:
-```javascript
-connection.getBalance(publicKey)
-```
+- EVM: DeBank total balance API
+- Solana: Moralis Solana account and token APIs
+- TRON: TronScan account API plus TRX pricing
+- BTC: public BTC address APIs plus BTC pricing
+- HyperCore: Hyperliquid `info` API, using `summary.accountValueUsd`
 
 ## 📁 Project Structure
 
@@ -141,6 +158,9 @@ connection.getBalance(publicKey)
 src/
 ├── App.js              # Main App Component
 ├── MnemonicChecker.js  # Core Functionality Component
+├── utils/
+│   ├── api.js          # Network/API query helpers
+│   └── crypto.js       # Mnemonic address derivation helpers
 ├── App.css             # App Styles
 └── index.js            # App Entry Point
 ```

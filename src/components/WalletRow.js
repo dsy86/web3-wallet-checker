@@ -51,6 +51,9 @@ const WalletRow = ({ data, comment, onCopy, onEdit, onRetry }) => {
                 {data.links.btc && (
                     <a href={data.links.btc} target="_blank" rel="noreferrer" className="text-yellow-600 hover:underline">Mempool</a>
                 )}
+                {data.links.hyperliquid && (
+                    <a href={data.links.hyperliquid} target="_blank" rel="noreferrer" className="text-cyan-600 hover:underline">Hyperliquid</a>
+                )}
                 {data.links.opensea && (
                     <a href={data.links.opensea} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">OpenSea</a>
                 )}

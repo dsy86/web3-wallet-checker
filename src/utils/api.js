@@ -1,5 +1,6 @@
 const DEBANK_API_KEY = process.env.REACT_APP_DEBANK_ACCESS_KEY;
 const MORALIS_API_KEY = process.env.REACT_APP_MORALIS_API_KEY;
+const HYPERLIQUID_INFO_URL = 'https://api.hyperliquid.xyz/info';
 
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -88,6 +89,107 @@ export const fetchDebankBalance = async (address) => {
         return null; // Return null on max retries failure
     }
 };
+
+// --- HYPERCORE ---
+export const fetchHyperCoreNetWorth = async (address) => {
+    try {
+        const [
+            spotState,
+            spotMetaAndAssetCtxs,
+            clearinghouseState,
+            rawAccountMode,
+        ] = await Promise.all([
+            postHyperliquidInfo({ type: 'spotClearinghouseState', user: address }),
+            postHyperliquidInfo({ type: 'spotMetaAndAssetCtxs' }),
+            postHyperliquidInfo({ type: 'clearinghouseState', user: address }),
+            loadHyperliquidAccountMode(address),
+        ]);
+
+        const [spotMeta, spotAssetCtxs] = spotMetaAndAssetCtxs;
+        const accountType = getHyperliquidAccountType(rawAccountMode);
+        const tokenByIndex = new Map(spotMeta.tokens.map((token) => [token.index, token]));
+        const priceByTokenIndex = buildHyperliquidSpotPriceMap(spotMeta, spotAssetCtxs);
+
+        const spotAccountValueUsd = sumNumbers((spotState.balances || []).map((balance) => {
+            const token = tokenByIndex.get(balance.token);
+            const priceUsd = priceByTokenIndex.get(balance.token) ?? null;
+            const total = Number(balance.total);
+            const valueUsd =
+                typeof priceUsd === 'number' && Number.isFinite(total)
+                    ? total * priceUsd
+                    : Number(balance.entryNtl);
+
+            return finiteNumber(token || balance.coin ? valueUsd : 0);
+        }));
+
+        const positions = (clearinghouseState.assetPositions || []).map(({ position }) => ({
+            valueUsd: finiteNumber(Number(position.positionValue)),
+            unrealizedPnlUsd: finiteNumber(Number(position.unrealizedPnl)),
+        }));
+
+        const perpsAccountValueUsd = finiteNumber(Number(clearinghouseState.marginSummary?.accountValue));
+        const unrealizedPnlUsd = sumNumbers(positions.map((position) => position.unrealizedPnlUsd));
+
+        const accountValueUsd =
+            accountType === 'manual'
+                ? perpsAccountValueUsd + spotAccountValueUsd
+                : Math.max(perpsAccountValueUsd, spotAccountValueUsd + unrealizedPnlUsd);
+
+        return finiteNumber(accountValueUsd);
+    } catch (error) {
+        console.warn(`Failed to fetch HyperCore net worth for ${address}:`, error);
+        return null;
+    }
+};
+
+const loadHyperliquidAccountMode = async (address) => {
+    try {
+        return await postHyperliquidInfo({ type: 'userAbstraction', user: address });
+    } catch {
+        return 'unknown';
+    }
+};
+
+const postHyperliquidInfo = async (body) => {
+    const response = await fetchWithRetry(HYPERLIQUID_INFO_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+    return response.json();
+};
+
+const getHyperliquidAccountType = (rawMode) => {
+    if (rawMode === 'portfolioMargin') return 'portfolio';
+    if (rawMode === 'unifiedAccount') return 'unified';
+    return 'manual';
+};
+
+const buildHyperliquidSpotPriceMap = (spotMeta, spotAssetCtxs) => {
+    const priceByTokenIndex = new Map([[0, 1]]);
+
+    spotMeta.universe.forEach((universe) => {
+        const baseToken = universe.tokens[0];
+        const quoteToken = universe.tokens[1];
+        const ctx = spotAssetCtxs[universe.index];
+        const price = Number(ctx?.markPx ?? ctx?.midPx);
+
+        if (quoteToken === 0 && Number.isFinite(price) && price > 0) {
+            priceByTokenIndex.set(baseToken, price);
+        }
+    });
+
+    return priceByTokenIndex;
+};
+
+const sumNumbers = (values) => {
+    return values.reduce(
+        (total, value) => total + (Number.isFinite(value) ? value : 0),
+        0,
+    );
+};
+
+const finiteNumber = (value) => Number.isFinite(value) ? value : 0;
 
 // --- SOLANA ---
 export const fetchSolanaNetWorth = async (address) => {

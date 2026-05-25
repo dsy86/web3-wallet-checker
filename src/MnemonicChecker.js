@@ -12,7 +12,8 @@ import {
   fetchSolanaNetWorth,
   fetchTronBalance,
   fetchBtcBalance,
-  fetchBtcPrice
+  fetchBtcPrice,
+  fetchHyperCoreNetWorth
 } from './utils/api';
 import WalletRow from './components/WalletRow';
 
@@ -20,6 +21,7 @@ const DEBANK_TIMEOUT = 850;
 const SOLANA_TIMEOUT = 1000;
 const TRON_TIMEOUT = 1000;
 const BTC_TIMEOUT = 1000;
+const HYPERCORE_TIMEOUT = 1000;
 
 const MnemonicChecker = () => {
   const [mnemonics, setMnemonics] = useState('');
@@ -41,7 +43,8 @@ const MnemonicChecker = () => {
     evm: false,
     sol: false,
     tron: false,
-    btc: false
+    btc: false,
+    hypercore: false
   });
 
   // Queue System
@@ -49,20 +52,24 @@ const MnemonicChecker = () => {
   const solanaQueueRef = useRef([]); // Solana Tasks
   const tronQueueRef = useRef([]); // Tron Tasks
   const btcQueueRef = useRef([]); // BTC Tasks
+  const hyperCoreQueueRef = useRef([]); // HyperCore Tasks
 
   const processingRef = useRef(false);
   const solanaProcessingRef = useRef(false);
   const tronProcessingRef = useRef(false);
   const btcProcessingRef = useRef(false);
+  const hyperCoreProcessingRef = useRef(false);
 
   const intervalRef = useRef(null);
   const solanaIntervalRef = useRef(null);
   const tronIntervalRef = useRef(null);
   const btcIntervalRef = useRef(null);
+  const hyperCoreIntervalRef = useRef(null);
 
   const walletsRef = useRef({});
   const tronWalletsRef = useRef({});
   const btcWalletsRef = useRef({});
+  const hyperCoreWalletsRef = useRef({});
 
   const pendingCountsRef = useRef({});
 
@@ -70,7 +77,7 @@ const MnemonicChecker = () => {
   useEffect(() => {
     const saved = localStorage.getItem('selectedNetworks');
     if (saved) {
-      setSelectedNetworks(JSON.parse(saved));
+      setSelectedNetworks(prev => ({ ...prev, ...JSON.parse(saved) }));
     }
   }, []);
 
@@ -162,6 +169,8 @@ const MnemonicChecker = () => {
         } else {
           newWorth = null;
         }
+      } else if (type === 'HyperCore') {
+        newWorth = await fetchHyperCoreNetWorth(address);
       }
     } catch (e) {
       console.warn("Manual retry failed", e);
@@ -238,6 +247,64 @@ const MnemonicChecker = () => {
       checkGlobalCompletion();
     }, DEBANK_TIMEOUT);
     return () => clearInterval(intervalRef.current);
+  }, [isScanning]);
+
+  // HyperCore Queue
+  useEffect(() => {
+    hyperCoreIntervalRef.current = setInterval(async () => {
+      if (hyperCoreQueueRef.current.length > 0 && !hyperCoreProcessingRef.current) {
+        hyperCoreProcessingRef.current = true;
+        const task = hyperCoreQueueRef.current.shift();
+        const { mnemonicId, mnemonic, pathIndex } = task;
+
+        try {
+          const address = deriveEvmAddress(mnemonic, pathIndex);
+          if (address) {
+            logProcess('HyperCore', mnemonic, address);
+            loadComment(address);
+            const netWorth = await fetchHyperCoreNetWorth(address);
+            if (netWorth !== null && netWorth > 0) logProcess('HyperCore', mnemonic, address, netWorth);
+
+            setWalletData(prev => {
+              const newer = [...prev];
+              const existingIdx = newer.findIndex(r => r.id === `hypercore-${mnemonicId}-${pathIndex}`);
+              const row = {
+                id: `hypercore-${mnemonicId}-${pathIndex}`,
+                mnemonic, address, netWorth: netWorth === null ? 0 : netWorth, type: 'HyperCore', path: pathIndex,
+                isError: netWorth === null,
+                links: { hyperliquid: 'https://app.hyperliquid.xyz/' }
+              };
+              if (existingIdx !== -1) newer[existingIdx] = row;
+              else newer.push(row);
+              return newer.sort((a, b) => b.netWorth - a.netWorth);
+            });
+
+            if (!hyperCoreWalletsRef.current[mnemonicId]) hyperCoreWalletsRef.current[mnemonicId] = {};
+            hyperCoreWalletsRef.current[mnemonicId][pathIndex] = netWorth;
+
+            const prevBalance = hyperCoreWalletsRef.current[mnemonicId][pathIndex - 1] || 0;
+            const prevPrevBalance = hyperCoreWalletsRef.current[mnemonicId][pathIndex - 2] || 0;
+
+            if (netWorth > 0 || (pathIndex > 0 && prevBalance > 0) || (pathIndex >= 2 && prevPrevBalance > 0) || pathIndex === 0) {
+              hyperCoreQueueRef.current.unshift({ mnemonicId, mnemonic, pathIndex: pathIndex + 1 });
+            } else {
+              pendingCountsRef.current[mnemonicId]--;
+              if (pendingCountsRef.current[mnemonicId] === 0) {
+                setProgress(prev => ({ ...prev, current: prev.current + 1 }));
+              }
+            }
+          }
+        } catch (error) {
+          console.warn(`HyperCore Task failed: ${pathIndex}`, error);
+          hyperCoreQueueRef.current.push(task);
+        } finally {
+          hyperCoreProcessingRef.current = false;
+        }
+      }
+      checkGlobalCompletion();
+    }, HYPERCORE_TIMEOUT);
+    return () => clearInterval(hyperCoreIntervalRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isScanning]);
 
   // Solana Queue
@@ -413,6 +480,7 @@ const MnemonicChecker = () => {
       solanaQueueRef.current.length === 0 && !solanaProcessingRef.current &&
       tronQueueRef.current.length === 0 && !tronProcessingRef.current &&
       btcQueueRef.current.length === 0 && !btcProcessingRef.current &&
+      hyperCoreQueueRef.current.length === 0 && !hyperCoreProcessingRef.current &&
       isScanning) {
       setIsScanning(false);
     }
@@ -420,8 +488,8 @@ const MnemonicChecker = () => {
 
   const handleCheckBalances = async () => {
     setWalletData([]);
-    walletsRef.current = {}; tronWalletsRef.current = {}; btcWalletsRef.current = {};
-    queueRef.current = []; solanaQueueRef.current = []; tronQueueRef.current = []; btcQueueRef.current = [];
+    walletsRef.current = {}; tronWalletsRef.current = {}; btcWalletsRef.current = {}; hyperCoreWalletsRef.current = {};
+    queueRef.current = []; solanaQueueRef.current = []; tronQueueRef.current = []; btcQueueRef.current = []; hyperCoreQueueRef.current = [];
 
     const mnemonicList = mnemonics.split('\n').map(m => m.trim().toLowerCase()).filter(m => m);
 
@@ -432,6 +500,7 @@ const MnemonicChecker = () => {
       if (selectedNetworks.sol) count++;
       if (selectedNetworks.tron) count++;
       if (selectedNetworks.btc) count += 3;
+      if (selectedNetworks.hypercore) count++;
       pendingCountsRef.current[i] = count;
     }
 
@@ -443,6 +512,7 @@ const MnemonicChecker = () => {
       if (selectedNetworks.evm) queueRef.current.push({ mnemonicId: i, mnemonic, pathIndex: 0 });
       if (selectedNetworks.sol) solanaQueueRef.current.push({ mnemonicId: i, mnemonic });
       if (selectedNetworks.tron) tronQueueRef.current.push({ mnemonicId: i, mnemonic, pathIndex: 0 });
+      if (selectedNetworks.hypercore) hyperCoreQueueRef.current.push({ mnemonicId: i, mnemonic, pathIndex: 0 });
       if (selectedNetworks.btc) {
         btcQueueRef.current.push({ mnemonicId: i, mnemonic, pathIndex: 0, type: 'native' });
         btcQueueRef.current.push({ mnemonicId: i, mnemonic, pathIndex: 0, type: 'nested' });
@@ -479,6 +549,7 @@ const MnemonicChecker = () => {
         <label className="flex items-center space-x-2 cursor-pointer"><input type="checkbox" checked={selectedNetworks.sol} onChange={() => toggleNetwork('sol')} className="form-checkbox h-5 w-5 text-green-600" /><span className="text-gray-700">SOLANA</span></label>
         <label className="flex items-center space-x-2 cursor-pointer"><input type="checkbox" checked={selectedNetworks.tron} onChange={() => toggleNetwork('tron')} className="form-checkbox h-5 w-5 text-red-600" /><span className="text-gray-700">TRON</span></label>
         <label className="flex items-center space-x-2 cursor-pointer"><input type="checkbox" checked={selectedNetworks.btc} onChange={() => toggleNetwork('btc')} className="form-checkbox h-5 w-5 text-yellow-600" /><span className="text-gray-700">BTC</span></label>
+        <label className="flex items-center space-x-2 cursor-pointer"><input type="checkbox" checked={selectedNetworks.hypercore} onChange={() => toggleNetwork('hypercore')} className="form-checkbox h-5 w-5 text-cyan-600" /><span className="text-gray-700">HyperCore</span></label>
       </div>
 
       <button

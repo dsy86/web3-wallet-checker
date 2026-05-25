@@ -247,6 +247,7 @@ const MnemonicChecker = () => {
       checkGlobalCompletion();
     }, DEBANK_TIMEOUT);
     return () => clearInterval(intervalRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isScanning]);
 
   // HyperCore Queue
@@ -348,6 +349,7 @@ const MnemonicChecker = () => {
       checkGlobalCompletion();
     }, SOLANA_TIMEOUT);
     return () => clearInterval(solanaIntervalRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [progress.total, progress.current, isScanning]);
 
   // Tron Queue
@@ -404,6 +406,7 @@ const MnemonicChecker = () => {
       checkGlobalCompletion();
     }, TRON_TIMEOUT);
     return () => clearInterval(tronIntervalRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isScanning]);
 
   // BTC Queue
@@ -473,6 +476,7 @@ const MnemonicChecker = () => {
       checkGlobalCompletion();
     }, BTC_TIMEOUT);
     return () => clearInterval(btcIntervalRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isScanning]);
 
   const checkGlobalCompletion = () => {
